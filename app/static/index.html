@@ -114,7 +114,7 @@
         .seg-btn,
         .unit-opt,
         .btn-blue,
-        .data-refresh,
+        .data-update,
         .custom-toggle,
         .region-btn,
         .toggle-switch {
@@ -729,7 +729,7 @@
         .data-age {
             color: var(--text-gray-500);
         }
-        .data-refresh {
+        .data-update {
             background: #f1f5fb;
             border: 1px solid var(--border-color);
             color: var(--text-gray-300);
@@ -739,8 +739,23 @@
             cursor: pointer;
             letter-spacing: 0.06em;
         }
-        .data-refresh:hover { background: #e5effc; border-color: #b8c7da; }
-        .data-refresh.is-hidden { display: none; }
+        .data-update:hover:not(:disabled) { background: #e5effc; border-color: #b8c7da; }
+        .data-update:disabled { cursor: not-allowed; opacity: 0.72; }
+        .data-update[aria-busy="true"]:disabled { cursor: wait; }
+        .data-update.is-hidden { display: none; }
+        .data-update-status {
+            display: block;
+            min-height: 12px;
+            margin-top: 5px;
+            font-size: 9px;
+            line-height: 1.35;
+            letter-spacing: 0.04em;
+            color: var(--text-gray-500);
+        }
+        .data-update-status:empty { display: none; }
+        .data-update-status.is-loading { color: #2563eb; }
+        .data-update-status.is-success { color: #15803d; }
+        .data-update-status.is-error { color: #b91c1c; }
 
         /* --- MATRIX SECTION --- */
         .matrix-strip { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
@@ -864,7 +879,7 @@
         body.theme-dark .ghost-btn,
         body.theme-dark .view-btn,
         body.theme-dark .data-pill,
-        body.theme-dark .data-refresh,
+        body.theme-dark .data-update,
         body.theme-dark .toolbar-select,
         body.theme-dark .field-select,
         body.theme-dark .leg-input,
@@ -905,7 +920,7 @@
         body.theme-dark .nav-link:hover,
         body.theme-dark .ghost-btn:hover,
         body.theme-dark .view-btn:hover,
-        body.theme-dark .data-refresh:hover,
+        body.theme-dark .data-update:hover:not(:disabled),
         body.theme-dark .toolbar-select:hover,
         body.theme-dark .mc-row:hover {
             background: #16243a;
@@ -964,8 +979,9 @@
                 <div class="sidebar-data">
                     <span class="data-pill" id="data-source">Data: Embedded</span>
                     <span class="data-age" id="data-age">Age: --</span>
-                    <button class="data-refresh is-hidden" id="data-refresh" type="button">Refresh</button>
+                    <button class="data-update is-hidden" id="data-update" type="button" aria-describedby="data-update-status">UPDATE DATA</button>
                 </div>
+                <span class="data-update-status" id="data-update-status" role="status" aria-live="polite" aria-atomic="true"></span>
             </div>
 
             <div class="section-header">

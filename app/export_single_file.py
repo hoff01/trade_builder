@@ -217,6 +217,18 @@ def _plot_year_expr(date_col: str, reference_col: str, month_label_col: str) -> 
     )
 
 
+def _canonical_day_of_year_expr(date_col: str) -> pl.Expr:
+    """Map every month/day onto a leap-year axis with a stable Feb 29 slot."""
+
+    date_expr = pl.col(date_col)
+    leap_alignment = (
+        pl.when((~date_expr.dt.is_leap_year()) & (date_expr.dt.month() > 2))
+        .then(1)
+        .otherwise(0)
+    )
+    return date_expr.dt.ordinal_day() + leap_alignment
+
+
 def _normalize_period(value: str) -> str:
     if value is None:
         return ""
@@ -722,16 +734,33 @@ def build_embedded_data(
         contract_year_expr = pl.col(contract_col).map_elements(_extract_contract_year, return_dtype=pl.Int64)
 
     df = df.sort(date_col)
-    day_of_year_expr = pl.col(date_col).dt.ordinal_day()
-    if contract_year_expr is not None:
-        year_expr = pl.col(date_col).dt.year()
-        days_in_year = pl.when(pl.col(date_col).dt.is_leap_year()).then(366).otherwise(365)
-        day_of_year_expr = pl.when(year_expr < contract_year_expr).then(day_of_year_expr + days_in_year).otherwise(day_of_year_expr)
+    fallback_plot_year_expr = _plot_year_expr(date_col, "_reference", "_month")
+    plot_year_expr = (
+        pl.when(contract_year_expr.is_not_null())
+        .then(contract_year_expr)
+        .otherwise(fallback_plot_year_expr)
+        if contract_year_expr is not None
+        else fallback_plot_year_expr
+    )
+    canonical_day_expr = _canonical_day_of_year_expr(date_col)
+    cycle_end_year_expr = plot_year_expr - (pl.col("_reference") - 1)
+    roll_month_expr = pl.col("_month").map_elements(
+        _roll_month_index, return_dtype=pl.Int64
+    )
+    # A reference series runs from its delivery month in the prior calendar
+    # year through the month before delivery in its cycle-end year. Keep that
+    # chronology numerically increasing while retaining month/day alignment.
+    day_of_year_expr = (
+        pl.when(
+            (roll_month_expr > 1)
+            & (pl.col(date_col).dt.year() == cycle_end_year_expr)
+        )
+        .then(canonical_day_expr + 366)
+        .otherwise(canonical_day_expr)
+    )
     df = df.with_columns([
         day_of_year_expr.alias("day_of_year"),
-        (pl.when(contract_year_expr.is_not_null()).then(contract_year_expr)
-         .otherwise(_plot_year_expr(date_col, "_reference", "_month")) if contract_year_expr is not None
-         else _plot_year_expr(date_col, "_reference", "_month")).alias("plot_year")
+        plot_year_expr.alias("plot_year")
     ])
     working_columns = []
     for column in (
@@ -1303,7 +1332,6 @@ def export_dashboard(
     df = df.filter(pl.col(date_col).is_not_null() & (pl.col(date_col) <= today))
     if not df.height:
         raise ValueError("No pricing rows remain after date validation and future-date filtering.")
-    data_max_date = df[date_col].max()
 
     root_config_by_code, enabled_roots = _load_root_metadata(root_config_path)
     df, name_col, bbl_per_mt_col, gal_per_bbl_col = _apply_root_configuration(
@@ -1315,6 +1343,9 @@ def export_dashboard(
         root_config_by_code,
         enabled_roots,
     )
+    # Freshness must describe the rows that actually reach the dashboard. A
+    # newer disabled root must never make an older enabled snapshot look fresh.
+    data_max_date = df[date_col].max()
     df = _round_dataframe_floats(df, precision)
     exported_roots = sorted(df[code_col].unique().to_list())
     export_root_config = {root: root_config_by_code[root] for root in exported_roots}

@@ -7,7 +7,12 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from app.root_config import ConfigValidationError, ROOT_COLUMNS, load_root_config
+from app.root_config import (
+    ConfigValidationError,
+    ROOT_COLUMNS,
+    UPDATE_SHEET_NAME,
+    load_root_config,
+)
 
 
 class RootConfigTests(unittest.TestCase):
@@ -19,11 +24,17 @@ class RootConfigTests(unittest.TestCase):
         self.assertEqual(metadata["HO"]["native_unit"], "cpg")
         self.assertEqual(metadata["QS"]["native_unit"], "$/MT")
         self.assertEqual(config.resolve_root("ME"), "WU")
+        self.assertEqual(config.update.host, "localhost")
+        self.assertEqual(config.update.port, 8194)
+        self.assertEqual(config.update.contract_start_year, 2020)
+        self.assertEqual(config.update.contract_end_year, 2028)
+        self.assertIn("PX_LAST", config.update.fields)
 
     def test_workbook_is_easy_to_fill_without_free_text_units(self) -> None:
         workbook = load_workbook("config/security_roots.xlsx")
         try:
             self.assertIn("Instructions", workbook.sheetnames)
+            self.assertIn(UPDATE_SHEET_NAME, workbook.sheetnames)
             sheet = workbook["Security Roots"]
             self.assertEqual(sheet.freeze_panes, "A2")
             validations = list(sheet.data_validations.dataValidation)
