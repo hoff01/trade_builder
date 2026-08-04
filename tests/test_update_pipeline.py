@@ -23,7 +23,7 @@ from app.update_pipeline import (
 
 ROOT_ROWS = (
     (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:WU", "ME", "Refined", 1),
-    (True, "HO", "Heating Oil", "Index", "$/gal", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:HO", "", "Refined", 2),
+    (True, "HO", "Heating Oil", "Index", "$/gal", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:HO", "", "Refined", 2),
 )
 
 
@@ -97,8 +97,15 @@ class UpdatePipelineTests(unittest.TestCase):
         tickers = {spec.ticker for spec in specs}
         self.assertIn("WUF26 Comdty", tickers)
         self.assertIn("WUZ26 Comdty", tickers)
-        self.assertIn("HOF26 Index", tickers)
-        self.assertIn("HOZ26 Index", tickers)
+        self.assertIn("HOF6 Index", tickers)
+        self.assertIn("HOG6 Index", tickers)
+        self.assertIn("HOZ6 Index", tickers)
+
+    def test_default_workbook_generates_hog6_comdty(self) -> None:
+        config = load_root_config("config/security_roots.xlsx")
+        specs = build_contract_universe(config, date(2026, 8, 3))
+        tickers = {spec.ticker for spec in specs}
+        self.assertIn("HOG6 Comdty", tickers)
 
     def test_reference_is_derived_from_contract_and_observation_dates(self) -> None:
         config = load_root_config(self.config_path)
@@ -178,7 +185,13 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertGreaterEqual(after.height, before.height)
         requested = {request.security for request in second.calls[0][0]}
         self.assertTrue(requested)
-        self.assertTrue(all("26 " in ticker for ticker in requested))
+        self.assertTrue(
+            all(
+                (ticker.startswith("WU") and ticker.endswith("26 Comdty"))
+                or (ticker.startswith("HO") and ticker.endswith("6 Index"))
+                for ticker in requested
+            )
+        )
         self.assertGreater(float(after["PX_LAST"].max()), 300.0)
 
     def test_late_export_failure_preserves_every_previous_artifact(self) -> None:

@@ -171,6 +171,9 @@ def _ticker_for(root: SecurityRoot, month_code: str, contract_year: int) -> str:
     values = {
         "root": root.root,
         "month_code": month_code,
+        "y": str(contract_year % 10),
+        "year_1d": str(contract_year % 10),
+        "year_digit": str(contract_year % 10),
         "yy": f"{contract_year % 100:02d}",
         "year_2d": f"{contract_year % 100:02d}",
         "year": contract_year,

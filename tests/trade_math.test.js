@@ -37,6 +37,14 @@ test('builds Bloomberg-style WU and HO tickers with yellow keys', () => {
     };
     assert.equal(TradeMath.buildTicker('WU', 'Jan', 2026, config), 'WUF26 Comdty');
     assert.equal(TradeMath.buildTicker('HO', 'F', 2026, config), 'HOF26 Comdty');
+    assert.equal(TradeMath.buildTicker('HO', 'Feb', 2026, {
+        yellow_key: 'Comdty',
+        ticker_template: '{root}{month_code}{y} {yellow_key}'
+    }), 'HOG6 Comdty');
+    assert.equal(TradeMath.buildTicker('WU', 'Sep', 2026, {
+        yellow_key: 'Index',
+        ticker_template: '{root}{month_code}{year_1d} {yellow_key}'
+    }), 'WUU6 Index');
 });
 
 test('parses WUF26 and HOF26 contracts instead of matching a literal backslash-d', () => {

@@ -479,8 +479,12 @@ def load_root_config(path: str | Path) -> RootConfig:
             )
         required_tokens = ("{root}", "{month_code}", "{yellow_key}")
         missing_tokens = [token for token in required_tokens if token not in ticker_template]
-        if not any(token in ticker_template for token in ("{yy}", "{year_2d}", "{year}")):
-            missing_tokens.append("{yy} (or {year_2d}/{year})")
+        year_tokens = (
+            "{y}", "{year_1d}", "{year_digit}",
+            "{yy}", "{year_2d}", "{year}", "{yyyy}",
+        )
+        if not any(token in ticker_template for token in year_tokens):
+            missing_tokens.append("{y} (or {yy}/{year})")
         if missing_tokens:
             issues.append(
                 f"row {row_number}: ticker_template is missing {', '.join(missing_tokens)}"

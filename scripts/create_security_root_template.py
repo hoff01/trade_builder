@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -25,12 +26,12 @@ from app.root_config import (
 )
 
 DEFAULT_ROWS = (
-    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:WU", "ME|GC JET", "Refined Products", 10),
-    (True, "HO", "Heating Oil", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:HO", "ULSD|HEATING OIL", "Refined Products", 20),
-    (True, "RB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:RB", "RBOB", "Refined Products", 30),
-    (True, "QS", "ICE Low Sulphur Gasoil", "Comdty", "$/MT", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "ICEEUR:QS1!", "GASOIL|LSGO", "Refined Products", 40),
-    (True, "CL", "WTI Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:CL", "WTI", "Crude", 50),
-    (True, "CO", "Brent Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{yy} {yellow_key}", "TVC:UKOIL", "BRENT", "Crude", 60),
+    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:WU", "ME|GC JET", "Refined Products", 10),
+    (True, "HO", "Heating Oil", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:HO", "ULSD|HEATING OIL", "Refined Products", 20),
+    (True, "RB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:RB", "RBOB", "Refined Products", 30),
+    (True, "QS", "ICE Low Sulphur Gasoil", "Comdty", "$/MT", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "ICEEUR:QS1!", "GASOIL|LSGO", "Refined Products", 40),
+    (True, "CL", "WTI Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:CL", "WTI", "Crude", 50),
+    (True, "CO", "Brent Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "TVC:UKOIL", "BRENT", "Crude", 60),
 )
 
 
@@ -45,6 +46,8 @@ def build_workbook(path: Path) -> None:
     instructions.append(["3", "Keep bbl_per_mt and gal_per_bbl explicit so every output-unit conversion is deterministic."])
     instructions.append(["4", "Review the Bloomberg Update sheet to control dates, fields, and connection settings."])
     instructions.append(["5", "Save the workbook, start the local dashboard, and press UPDATE DATA."])
+    instructions.append(["Ticker example", "HO + Feb (G) + {y} + Comdty produces HOG6 Comdty for 2026."])
+    instructions.append(["Year placeholders", "Use {y} for 6, {yy} for 26, or {year} for 2026. yellow_key independently controls Comdty vs Index."])
     instructions.append([])
     instructions.append(["Conversion checks"])
     instructions.append(["cpg → $/gal", "divide by 100"])
@@ -69,6 +72,11 @@ def build_workbook(path: Path) -> None:
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center")
+    sheet["H1"].comment = Comment(
+        "Examples: {root}{month_code}{y} {yellow_key} -> HOG6 Comdty; "
+        "use {yy} for HOG26 or {year} for HOG2026. Set yellow_key separately.",
+        "Pricing Dashboard",
+    )
 
     widths = {
         "A": 11, "B": 10, "C": 28, "D": 13, "E": 14, "F": 13,

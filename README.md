@@ -40,6 +40,24 @@ python3 scripts/update_from_bloomberg.py
 
 Use `--full` to discard the incremental cache and re-pull the complete configured history. Normal updates re-pull only active contracts from their last stored date minus the configured overlap, while retaining completed history.
 
+## Complete the live dashboard
+
+1. Edit every enabled row in `config/security_roots.xlsx`: verify `root`, `common_name`, `yellow_key`, `native_unit`, conversion factors, and `ticker_template` against Bloomberg FLDS/security lookup.
+2. Review the **Bloomberg Update** sheet: dates, delivery-year range, history months, reference depth, and requested fields.
+3. On the licensed Windows workstation, open and log in to Bloomberg Terminal.
+4. Install `requirements-bloomberg.txt`, then run `UPDATE_AND_OPEN.bat`.
+5. Run one full pull after changing ticker formats, yellow keys, fields, history depth, or the start date:
+
+   ```bat
+   .venv\Scripts\python.exe scripts\update_from_bloomberg.py --full
+   ```
+
+6. Open the local dashboard and test all three workspaces, every configured root, unit conversion, price field, VaR, and CSV export.
+7. Check `dist/update_manifest.json`: status must be `complete`, every enabled root must appear under `root_coverage`, and warnings must be understood.
+8. Copy `dist/pricing_dashboard_trade_builder.html`, `dist/pricing_data.csv.gz`, and `dist/pricing_data.parquet` to a machine without Bloomberg and verify the portable handoff.
+
+After the first full pull, use **UPDATE DATA** for normal incremental refreshes.
+
 ## Shareable export package
 
 A successful update publishes all files from the same validated CSV snapshot:
@@ -78,7 +96,7 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 | `native_unit` | Native Bloomberg quote unit | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
 | `bbl_per_mt` | Product density conversion | `7.45` |
 | `gal_per_bbl` | Gallons per barrel | `42` |
-| `ticker_template` | Contract construction rule | `{root}{month_code}{yy} {yellow_key}` |
+| `ticker_template` | Contract construction rule and year style | `{root}{month_code}{y} {yellow_key}` |
 | `tradingview_symbol` | Optional external symbol | `NYMEX:HO` |
 | `aliases` | Old roots/names separated by `|` | `ME|GC JET` |
 | `product_group` | Sidebar grouping | `Refined Products` |
@@ -98,7 +116,14 @@ The **Bloomberg Update** sheet controls:
 - batch size and per-request timeout;
 - maximum standalone HTML size.
 
-For example, the standard template generates `WUF26 Comdty` for January 2026 GC Jet. Changing a root to `Index` makes the same rule end in `Index` automatically.
+The year placeholder and yellow key are independent:
+
+- `{root}{month_code}{y} {yellow_key}` generates `HOG6 Comdty` for February 2026 Heating Oil.
+- Replace `{y}` with `{yy}` to generate `HOG26 Comdty`.
+- Replace `{y}` with `{year}` to generate `HOG2026 Comdty`.
+- Change `yellow_key` from `Comdty` to `Index` to make the same ticker end in `Index`.
+
+The standard workbook uses Bloomberg-style one-digit years. Each root can use its own template and yellow key.
 
 ## Unit conversion contract
 
