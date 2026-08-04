@@ -356,12 +356,15 @@ def _normalize_root_entry(entry: dict, fallback_root="") -> tuple[str, dict]:
 
     normalized = dict(entry)
     normalized["root"] = root
-    normalized["display_name"] = str(
-        entry.get("display_name")
+    common_name = str(
+        entry.get("common_name")
+        or entry.get("display_name")
         or entry.get("clean_name")
         or entry.get("name")
         or root
     ).strip()
+    normalized["common_name"] = common_name
+    normalized["display_name"] = common_name
     normalized["native_unit"] = str(
         entry.get("native_unit") or entry.get("source_unit") or entry.get("unit") or ""
     ).strip()

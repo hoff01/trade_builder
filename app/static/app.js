@@ -2309,7 +2309,7 @@ function normalizeRootConfigEntry(value, fallbackRoot) {
     return {
         ...entry,
         root,
-        name: entry.name || entry.display_name || entry.displayName || entry.clean_name || root,
+        name: entry.common_name || entry.name || entry.display_name || entry.displayName || entry.clean_name || root,
         native_unit: nativeUnit || String(nativeUnitRaw || '').trim(),
         yellow_key: entry.yellow_key || entry.yellowKey || '',
         ticker_template: entry.ticker_template || entry.tickerTemplate || '{root}{month_code}{year_2d} {yellow_key}',

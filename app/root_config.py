@@ -17,7 +17,7 @@ UPDATE_SHEET_NAME = "Bloomberg Update"
 ROOT_COLUMNS = (
     "enabled",
     "root",
-    "display_name",
+    "common_name",
     "yellow_key",
     "native_unit",
     "bbl_per_mt",
@@ -77,10 +77,18 @@ class SecurityRoot:
     product_group: str
     sort_order: int
 
+    @property
+    def common_name(self) -> str:
+        """Authoritative dashboard label configured in the spreadsheet."""
+
+        return self.display_name
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "root": self.root,
+            "common_name": self.common_name,
+            # Retained for the existing browser payload contract.
             "display_name": self.display_name,
             "yellow_key": self.yellow_key,
             "native_unit": self.native_unit,
@@ -241,7 +249,7 @@ def _read_csv_rows(path: Path) -> list[tuple[int, dict[str, Any]]]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         headers = tuple(reader.fieldnames or ())
-        missing = [column for column in ROOT_COLUMNS if column not in headers]
+        missing = _missing_root_columns(headers)
         if missing:
             raise ConfigValidationError([f"missing spreadsheet columns: {', '.join(missing)}"])
         return [(index, dict(row)) for index, row in enumerate(reader, start=2)]
@@ -255,7 +263,7 @@ def _read_xlsx_rows(path: Path) -> list[tuple[int, dict[str, Any]]]:
         sheet = workbook[SHEET_NAME]
         values = sheet.iter_rows(values_only=True)
         headers = tuple(str(value or "").strip() for value in next(values, ()))
-        missing = [column for column in ROOT_COLUMNS if column not in headers]
+        missing = _missing_root_columns(headers)
         if missing:
             raise ConfigValidationError([f"missing spreadsheet columns: {', '.join(missing)}"])
         rows: list[tuple[int, dict[str, Any]]] = []
@@ -266,6 +274,16 @@ def _read_xlsx_rows(path: Path) -> list[tuple[int, dict[str, Any]]]:
         return rows
     finally:
         workbook.close()
+
+
+def _missing_root_columns(headers: Iterable[str]) -> list[str]:
+    """Require the current schema while accepting legacy display_name files."""
+
+    available = set(headers)
+    missing = [column for column in ROOT_COLUMNS if column not in available]
+    if "common_name" in missing and "display_name" in available:
+        missing.remove("common_name")
+    return missing
 
 
 def _parse_date_setting(value: object, key: str, issues: list[str], fallback: date) -> date:
@@ -431,7 +449,9 @@ def load_root_config(path: str | Path) -> RootConfig:
     for row_number, row in raw_rows:
         enabled = _parse_enabled(row.get("enabled"), row_number, issues)
         root = str(row.get("root") or "").strip().upper()
-        display_name = str(row.get("display_name") or "").strip()
+        common_name = str(
+            row.get("common_name") or row.get("display_name") or ""
+        ).strip()
         yellow_raw = str(row.get("yellow_key") or "").strip().lower()
         yellow_key = VALID_YELLOW_KEYS.get(yellow_raw, "")
         native_unit = normalize_unit(row.get("native_unit"))
@@ -449,8 +469,8 @@ def load_root_config(path: str | Path) -> RootConfig:
             issues.append(f"row {row_number}: duplicate root {root!r} (first seen on row {seen_roots[root]})")
         else:
             seen_roots[root] = row_number
-        if not display_name:
-            issues.append(f"row {row_number}: display_name is required")
+        if not common_name:
+            issues.append(f"row {row_number}: common_name is required")
         if not yellow_key:
             issues.append(f"row {row_number}: yellow_key must be Comdty or Index")
         if not native_unit:
@@ -479,7 +499,7 @@ def load_root_config(path: str | Path) -> RootConfig:
             SecurityRoot(
                 enabled=enabled,
                 root=root,
-                display_name=display_name,
+                display_name=common_name,
                 yellow_key=yellow_key,
                 native_unit=native_unit,
                 bbl_per_mt=bbl_per_mt,

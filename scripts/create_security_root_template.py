@@ -40,7 +40,7 @@ def build_workbook(path: Path) -> None:
     instructions = workbook.active
     instructions.title = "Instructions"
     instructions.append(["Pricing Dashboard — Security Root Setup"])
-    instructions.append(["1", "Add one row per Bloomberg root on the Security Roots sheet."])
+    instructions.append(["1", "Add one row per Bloomberg root and set common_name to the label shown everywhere in the dashboard."])
     instructions.append(["2", "Choose Comdty or Index and the native quote unit from the dropdowns."])
     instructions.append(["3", "Keep bbl_per_mt and gal_per_bbl explicit so every output-unit conversion is deterministic."])
     instructions.append(["4", "Review the Bloomberg Update sheet to control dates, fields, and connection settings."])

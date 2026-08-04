@@ -73,7 +73,7 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 |---|---|---|
 | `enabled` | Include the root in Bloomberg and the export | `TRUE` |
 | `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO` |
-| `display_name` | Dashboard label | `GC Jet`, `Heating Oil` |
+| `common_name` | Authoritative label used everywhere in the dashboard and exports | `GC Jet`, `Heating Oil` |
 | `yellow_key` | Bloomberg security type | `Comdty` or `Index` |
 | `native_unit` | Native Bloomberg quote unit | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
 | `bbl_per_mt` | Product density conversion | `7.45` |
@@ -84,7 +84,7 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 | `product_group` | Sidebar grouping | `Refined Products` |
 | `sort_order` | Display order | `10` |
 
-The workbook already includes `WU` for GC Jet and `HO` for Heating Oil. Yellow key and unit fields use dropdowns. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
+The workbook already includes `WU` for GC Jet and `HO` for Heating Oil. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key and unit fields use dropdowns. Existing files that still use `display_name` remain supported. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
 
 The **Bloomberg Update** sheet controls:
 

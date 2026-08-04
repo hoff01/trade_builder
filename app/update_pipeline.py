@@ -208,7 +208,7 @@ def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tu
                     ContractSpec(
                         ticker=ticker,
                         root=root.root,
-                        display_name=root.display_name,
+                        display_name=root.common_name,
                         yellow_key=root.yellow_key,
                         native_unit=root.native_unit,
                         bbl_per_mt=root.bbl_per_mt,

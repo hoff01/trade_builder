@@ -141,6 +141,8 @@ class UpdatePipelineTests(unittest.TestCase):
         parquet_frame = pl.read_parquet(self.paths.parquet)
         self.assertEqual(csv_frame.height, parquet_frame.height)
         self.assertEqual(set(csv_frame["security_prefix"]), {"WU", "HO"})
+        self.assertEqual(set(csv_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil"})
+        self.assertEqual(set(parquet_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil"})
         self.assertTrue(
             csv_frame.select((pl.col("PX_LAST") == pl.col("PX_LAST").round(5)).all()).item()
         )

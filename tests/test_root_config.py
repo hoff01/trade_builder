@@ -19,6 +19,7 @@ class RootConfigTests(unittest.TestCase):
     def test_default_workbook_contains_requested_roots_and_native_units(self) -> None:
         config = load_root_config("config/security_roots.xlsx")
         metadata = config.to_dict()
+        self.assertEqual(metadata["WU"]["common_name"], "GC Jet")
         self.assertEqual(metadata["WU"]["display_name"], "GC Jet")
         self.assertEqual(metadata["WU"]["native_unit"], "cpg")
         self.assertEqual(metadata["HO"]["native_unit"], "cpg")
@@ -37,6 +38,7 @@ class RootConfigTests(unittest.TestCase):
             self.assertIn(UPDATE_SHEET_NAME, workbook.sheetnames)
             sheet = workbook["Security Roots"]
             self.assertEqual(sheet.freeze_panes, "A2")
+            self.assertIn("common_name", [cell.value for cell in sheet[1]])
             validations = list(sheet.data_validations.dataValidation)
             self.assertGreaterEqual(len(validations), 3)
             formulas = {validation.formula1 for validation in validations}
@@ -59,6 +61,25 @@ class RootConfigTests(unittest.TestCase):
             message = str(raised.exception)
             self.assertIn("duplicate root", message)
             self.assertIn("native_unit", message)
+
+    def test_legacy_display_name_header_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy_roots.csv"
+            headers = [
+                "display_name" if column == "common_name" else column
+                for column in ROOT_COLUMNS
+            ]
+            row = [
+                True, "WU", "Legacy Jet Name", "Comdty", "cpg", 7.45, 42,
+                "{root}{month_code}{yy} {yellow_key}", "", "", "Refined", 1,
+            ]
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(headers)
+                writer.writerow(row)
+
+            config = load_root_config(path)
+            self.assertEqual(config.enabled_roots[0].common_name, "Legacy Jet Name")
 
 
 if __name__ == "__main__":

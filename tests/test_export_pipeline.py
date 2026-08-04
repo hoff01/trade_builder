@@ -168,6 +168,7 @@ class ExportPipelineTests(unittest.TestCase):
         self.assertEqual(payload["meta"]["updated_at"], "2026-01-03T00:00:00Z")
         self.assertEqual(payload["meta"]["fields"]["available"], summary["fields"])
         self.assertEqual(set(payload["meta"]["root_config"]), {"HO", "WU"})
+        self.assertEqual(payload["meta"]["root_config"]["WU"]["common_name"], "GC Jet")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["display_name"], "GC Jet")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["native_unit"], "cpg")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["yellow_key"], "Comdty")
