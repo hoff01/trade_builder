@@ -1,6 +1,8 @@
 -r requirements.txt
 
-# Owner-only dependency for Bloomberg Desktop API updates. The portable HTML,
-# CSV.gz, and Parquet exports do not need Bloomberg or Python.
---extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple
+# Owner-only convenience requirements for Bloomberg Desktop API updates.
+# INSTALL_BLOOMBERG.bat is preferred because it installs the base packages from
+# PyPI first, then installs blpapi alone from Bloomberg's dedicated index with
+# --index-url. The portable exports do not need Bloomberg or Python.
+--extra-index-url https://blpapi.bloomberg.com/repository/releases/python/simple/
 blpapi>=3.25,<4

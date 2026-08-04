@@ -91,7 +91,8 @@ def _load_blpapi() -> Any:
     except (ImportError, OSError) as exc:
         raise BloombergDependencyError(
             "Bloomberg Python API is not installed or could not be loaded. "
-            "Install blpapi on the licensed Bloomberg workstation."
+            "Run INSTALL_BLOOMBERG.bat to install blpapi on the licensed "
+            "Bloomberg workstation."
         ) from exc
 
 

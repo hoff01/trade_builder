@@ -1,33 +1,14 @@
 @echo off
-setlocal
-cd /d "%~dp0"
+setlocal EnableExtensions
+title Pricing Dashboard - Trade Builder
 
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" scripts\run_dashboard.py --open
-    goto :finished
-)
-
-where py >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-    py -3 scripts\run_dashboard.py --open
-    goto :finished
-)
-
-where python >nul 2>nul
-if %ERRORLEVEL% EQU 0 (
-    python scripts\run_dashboard.py --open
-    goto :finished
-)
-
-echo Python was not found. Install Python 3, then run this launcher again.
-pause
-exit /b 1
-
-:finished
-set "EXIT_CODE=%ERRORLEVEL%"
-if not "%EXIT_CODE%"=="0" (
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\run_windows.ps1"
+set "DASHBOARD_EXIT=%ERRORLEVEL%"
+if not "%DASHBOARD_EXIT%"=="0" (
     echo.
-    echo Pricing Dashboard stopped with exit code %EXIT_CODE%.
+    echo Pricing Dashboard failed. Review the error above.
     pause
+    exit /b %DASHBOARD_EXIT%
 )
-exit /b %EXIT_CODE%
+
+exit /b 0

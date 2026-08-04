@@ -34,8 +34,8 @@ STATUS_PATH = "/api/update/status"
 UPDATE_PATH = "/api/update"
 
 _BLOOMBERG_MISSING_MESSAGE = (
-    "Bloomberg update is unavailable on this machine. Install blpapi on the "
-    "licensed workstation and open Bloomberg Terminal."
+    "Bloomberg update is unavailable on this machine. Run INSTALL_BLOOMBERG.bat "
+    "to install blpapi on the licensed workstation, then open Bloomberg Terminal."
 )
 _BLOOMBERG_READY_MESSAGE = (
     "Bloomberg API support is installed. Bloomberg Terminal must be open and "

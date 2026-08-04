@@ -23,12 +23,35 @@ The update action exists only in the local owner server. The exported HTML remai
 Bloomberg Terminal must be open and logged in on the licensed Windows computer.
 
 ```bat
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-bloomberg.txt
+INSTALL_BLOOMBERG.bat
 UPDATE_AND_OPEN.bat
 ```
 
+`INSTALL_BLOOMBERG.bat` prefers 64-bit Python 3.13 and falls back to 3.12. It creates the reusable environment at `%USERPROFILE%\Pyenvs\trade_builder`, installs the full Polars/dashboard stack from PyPI, downloads `blpapi` only from Bloomberg's official package index, and runs native import checks. `UPDATE_AND_OPEN.bat` runs the same self-healing bootstrap automatically before opening the dashboard. It invokes the managed environment's Python directly, so it never falls back to an unconfigured system Python.
+
+For a manual install, use the same interpreter for every command:
+
+```bat
+py -3.13 -m venv "%USERPROFILE%\Pyenvs\trade_builder"
+"%USERPROFILE%\Pyenvs\trade_builder\Scripts\python.exe" -m pip install -r requirements.txt
+"%USERPROFILE%\Pyenvs\trade_builder\Scripts\python.exe" -m pip install --index-url=https://blpapi.bloomberg.com/repository/releases/python/simple/ blpapi
+"%USERPROFILE%\Pyenvs\trade_builder\Scripts\python.exe" scripts\check_runtime_compatibility.py
+```
+
+Replace `-3.13` with `-3.12` when needed. `https://bloomberg.com` is Bloomberg's website, not a Python package index; pip must use the dedicated `blpapi.bloomberg.com/repository/releases/python/simple` URL above.
+
 Then press **UPDATE DATA** in the dashboard. The button stays hidden in a downloaded `file://` export and appears only when the local owner server is running.
+
+### Verified Python compatibility
+
+The dependency ranges in `requirements.txt` and `requirements-bloomberg.txt` are supported on CPython 3.12 and 3.13. A clean compatibility check on August 4, 2026 resolved and imported:
+
+| Python | Bloomberg BLPAPI | Polars | Result |
+|---|---:|---:|---|
+| 3.12.12 | 3.26.6.1 | 1.43.2 | Native import and smoke check passed |
+| 3.13.12 | 3.26.6.1 | 1.43.2 | Native import and smoke check passed |
+
+Bloomberg and Polars also publish `win_amd64` wheels compatible with both versions. This verifies package installation and native loading; a live Bloomberg data request still requires Bloomberg Terminal to be open, logged in, licensed, and reachable at `localhost:8194`.
 
 The macOS launcher is `START_PRICING_DASHBOARD.command`. It is useful for dashboard development, but a normal Bloomberg Professional Desktop API session is expected to run on the licensed Bloomberg Windows workstation.
 
@@ -45,11 +68,11 @@ Use `--full` to discard the incremental cache and re-pull the complete configure
 1. Edit every enabled row in `config/security_roots.xlsx`: verify `root`, `common_name`, `yellow_key`, `native_unit`, conversion factors, `ticker_template`, and `curve_mode` against Bloomberg FLDS/security lookup.
 2. Review the **Bloomberg Update** sheet: dates, delivery-year range, history months, reference depth, full-data `fields`, and lightweight `dashboard_fields`.
 3. On the licensed Windows workstation, open and log in to Bloomberg Terminal.
-4. Install `requirements-bloomberg.txt`, then run `UPDATE_AND_OPEN.bat`.
+4. Run `INSTALL_BLOOMBERG.bat`, then run `UPDATE_AND_OPEN.bat`.
 5. Run one full pull after changing ticker formats, yellow keys, curve modes, fields, history depth, or the start date:
 
    ```bat
-   .venv\Scripts\python.exe scripts\update_from_bloomberg.py --full
+   "%USERPROFILE%\Pyenvs\trade_builder\Scripts\python.exe" scripts\update_from_bloomberg.py --full
    ```
 
 6. Open the local dashboard and test all three workspaces, every configured root, unit conversion, price field, VaR, and CSV export.
@@ -176,5 +199,7 @@ npm run check
 python3 scripts/validate_pricing_data.py data/sample_market_data.parquet
 python3 scripts/build_dashboard.py
 ```
+
+On the Bloomberg workstation, also run `%USERPROFILE%\Pyenvs\trade_builder\Scripts\python.exe scripts\check_runtime_compatibility.py`. It validates the Python version and exercises the Bloomberg and Polars native bindings without opening a Bloomberg session.
 
 The automated suite covers spreadsheet ticker expansion, Comdty/Index suffixes, Bloomberg partial/final events and failure cleanup, dated references, incremental merge behavior, five-decimal artifacts, CSV/Parquet parity, single-flight update requests, offline boundaries, and rollback after a late export failure.

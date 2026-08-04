@@ -4,7 +4,7 @@ from dataclasses import asdict, is_dataclass
 import gzip
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 import re
 
@@ -1044,7 +1044,9 @@ def build_embedded_data(
     ]
     sidebar.sort(key=lambda item: item["code"])
 
-    built_at = built_at or (datetime.utcnow().isoformat(timespec="seconds") + "Z")
+    built_at = built_at or datetime.now(timezone.utc).isoformat(
+        timespec="seconds"
+    ).replace("+00:00", "Z")
     if data_max_date is None and df.height:
         data_max_date = df[date_col].max()
     if hasattr(data_max_date, "isoformat"):
