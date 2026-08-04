@@ -41,7 +41,7 @@ const FALLBACK_ROOT_CONFIG = Object.freeze({
         name: 'GC Jet',
         native_unit: 'cpg',
         yellow_key: 'Comdty',
-        ticker_template: '{root}{month_code}{year_2d} {yellow_key}',
+        ticker_template: '{root}{month_code}{y} {yellow_key}',
         bbl_per_mt: DEFAULT_BBL_PER_MT,
         gal_per_bbl: DEFAULT_GAL_PER_BBL,
         aliases: ['ME', 'GC JET'],
@@ -52,7 +52,7 @@ const FALLBACK_ROOT_CONFIG = Object.freeze({
         name: 'Heating Oil',
         native_unit: 'cpg',
         yellow_key: 'Comdty',
-        ticker_template: '{root}{month_code}{year_2d} {yellow_key}',
+        ticker_template: '{root}{month_code}{y} {yellow_key}',
         bbl_per_mt: DEFAULT_BBL_PER_MT,
         gal_per_bbl: DEFAULT_GAL_PER_BBL,
         tradingview_symbol: 'NYMEX:HO',
@@ -276,6 +276,8 @@ let pendingPlotlyResize = null;
 const SETTINGS_VERSION = 1;
 let settingsSaveTimer = null;
 const SHOULD_PERSIST_SETTINGS = window.location.protocol === 'file:';
+const UPDATE_API_STATUS_PATH = '/api/update/status';
+const UPDATE_API_PATH = '/api/update';
 
 function decodeBase64ToBytes(base64) {
     const chunkSize = 1000000;
@@ -348,7 +350,7 @@ document.addEventListener('DOMContentLoaded', () => {
         bindPrebuiltControls();
         bindSidebarToggles();
         bindFieldControls();
-        bindDataRefresh();
+        bindDataUpdate();
         bindPersonalDownload();
         bindExportData();
         updateLastUpdated();
@@ -792,15 +794,105 @@ function scheduleChartUpdate() {
     });
 }
 
-function bindDataRefresh() {
-    const button = document.getElementById('data-refresh');
-    if (!button) return;
+function isHttpDashboard() {
+    return window.location.protocol === 'http:' || window.location.protocol === 'https:';
+}
+
+function setDataUpdateState(kind, message) {
+    const button = document.getElementById('data-update');
+    const status = document.getElementById('data-update-status');
+    const stateKind = ['loading', 'success', 'error', 'unavailable'].includes(kind) ? kind : '';
+    const statusKind = stateKind === 'unavailable' ? 'error' : stateKind;
+
+    if (button) {
+        button.disabled = stateKind === 'loading' || stateKind === 'success' || stateKind === 'unavailable';
+        button.textContent = stateKind === 'loading' ? 'UPDATING…' : 'UPDATE DATA';
+        button.setAttribute('aria-busy', stateKind === 'loading' ? 'true' : 'false');
+    }
+    if (status) {
+        status.classList.remove('is-loading', 'is-success', 'is-error');
+        if (statusKind) status.classList.add(`is-${statusKind}`);
+        status.textContent = message || '';
+    }
+}
+
+async function readDataUpdateResponse(response) {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch (err) {
+        return { message: text };
+    }
+}
+
+function dataUpdateMessage(payload, fallback) {
+    if (!payload || typeof payload !== 'object') return fallback;
+    const detail = payload.error || payload.detail || payload.message;
+    return typeof detail === 'string' && detail.trim() ? detail.trim() : fallback;
+}
+
+function reloadDashboardAfterUpdate() {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('_updated', String(Date.now()));
+    window.location.replace(nextUrl.toString());
+}
+
+async function probeDataUpdateApi() {
+    const button = document.getElementById('data-update');
+    if (!button || !isHttpDashboard()) return false;
+
+    try {
+        const response = await fetch(UPDATE_API_STATUS_PATH, {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+            cache: 'no-store'
+        });
+        if (!response.ok) return false;
+        const payload = await readDataUpdateResponse(response);
+        if (!payload || payload.update_api !== true) return false;
+
+        button.classList.remove('is-hidden');
+        if (payload.available === false) {
+            setDataUpdateState(
+                'unavailable',
+                dataUpdateMessage(payload, 'Bloomberg updating is unavailable on this machine.')
+            );
+            return true;
+        }
+        const updating = payload.updating === true || payload.running === true;
+        setDataUpdateState(updating ? 'loading' : '', updating ? 'An update is already in progress…' : '');
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function bindDataUpdate() {
+    const button = document.getElementById('data-update');
+    if (!button || !isHttpDashboard()) return;
+
     button.addEventListener('click', async () => {
-        const updated = await loadRemoteDataIfConfigured();
-        if (updated) {
-            updateChart();
+        setDataUpdateState('loading', 'Updating Bloomberg data and rebuilding the export…');
+        try {
+            const response = await fetch(UPDATE_API_PATH, {
+                method: 'POST',
+                headers: { Accept: 'application/json' },
+                cache: 'no-store'
+            });
+            const payload = await readDataUpdateResponse(response);
+            if (!response.ok || payload.ok === false || payload.success === false) {
+                throw new Error(dataUpdateMessage(payload, `Update request failed (${response.status}).`));
+            }
+            setDataUpdateState('success', dataUpdateMessage(payload, 'Update complete. Reloading…'));
+            window.setTimeout(reloadDashboardAfterUpdate, 400);
+        } catch (err) {
+            const message = err && err.message ? err.message : 'The update could not be completed.';
+            setDataUpdateState('error', `Update failed: ${message}`);
         }
     });
+
+    void probeDataUpdateApi();
 }
 
 function bindPersonalDownload() {
@@ -1098,7 +1190,6 @@ function formatAge(ms) {
 function updateDataStatus(data, sourceLabel) {
     const sourceEl = document.getElementById('data-source');
     const ageEl = document.getElementById('data-age');
-    const refreshButton = document.getElementById('data-refresh');
 
     if (sourceEl) {
         sourceEl.textContent = `Data: ${sourceLabel}`;
@@ -1112,11 +1203,6 @@ function updateDataStatus(data, sourceLabel) {
         ageEl.textContent = `Age: ${updatedAt ? formatAge(ageMs) : '--'}`;
     }
 
-    const remoteUrl = getRemoteDataUrl();
-    const isOld = updatedAt ? ageMs >= 24 * 60 * 60 * 1000 : false;
-    if (refreshButton) {
-        refreshButton.classList.toggle('is-hidden', !(remoteUrl && isOld));
-    }
 }
 
 async function fetchRemoteData(url) {
@@ -2223,10 +2309,10 @@ function normalizeRootConfigEntry(value, fallbackRoot) {
     return {
         ...entry,
         root,
-        name: entry.name || entry.display_name || entry.displayName || entry.clean_name || root,
+        name: entry.common_name || entry.name || entry.display_name || entry.displayName || entry.clean_name || root,
         native_unit: nativeUnit || String(nativeUnitRaw || '').trim(),
         yellow_key: entry.yellow_key || entry.yellowKey || '',
-        ticker_template: entry.ticker_template || entry.tickerTemplate || '{root}{month_code}{year_2d} {yellow_key}',
+        ticker_template: entry.ticker_template || entry.tickerTemplate || '{root}{month_code}{y} {yellow_key}',
         tradingview_symbol: entry.tradingview_symbol || entry.tradingviewSymbol || '',
         bbl_per_mt: entry.bbl_per_mt != null ? entry.bbl_per_mt : entry.bblPerMT,
         gal_per_bbl: entry.gal_per_bbl != null ? entry.gal_per_bbl : entry.galPerBbl,

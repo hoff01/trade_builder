@@ -12,7 +12,7 @@ import unittest
 
 import polars as pl
 
-from app.export_single_file import export_dashboard
+from app.export_single_file import build_embedded_data, export_dashboard
 from app.root_config import ROOT_COLUMNS
 
 
@@ -168,6 +168,7 @@ class ExportPipelineTests(unittest.TestCase):
         self.assertEqual(payload["meta"]["updated_at"], "2026-01-03T00:00:00Z")
         self.assertEqual(payload["meta"]["fields"]["available"], summary["fields"])
         self.assertEqual(set(payload["meta"]["root_config"]), {"HO", "WU"})
+        self.assertEqual(payload["meta"]["root_config"]["WU"]["common_name"], "GC Jet")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["display_name"], "GC Jet")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["native_unit"], "cpg")
         self.assertEqual(payload["meta"]["root_config"]["WU"]["yellow_key"], "Comdty")
@@ -211,6 +212,57 @@ class ExportPipelineTests(unittest.TestCase):
                 self.assertTrue(
                     compact.select((pl.col(column_name) == pl.col(column_name).round(5)).all()).item()
                 )
+
+    def test_reference_cycles_use_monotonic_leap_aligned_x_axis(self) -> None:
+        rows = (
+            (date(2024, 9, 3), 2, 20.0),
+            (date(2025, 3, 3), 2, 21.0),
+            (date(2025, 9, 3), 1, 10.0),
+            (date(2026, 3, 3), 1, 11.0),
+        )
+        frame = pl.DataFrame(
+            {
+                "date": [row[0] for row in rows],
+                "security_str": ["WUQ26 Comdty"] * len(rows),
+                "security_prefix": ["WU"] * len(rows),
+                "CLEAN_NAME": ["GC Jet"] * len(rows),
+                "frequency": ["Monthly"] * len(rows),
+                "reference": [row[1] for row in rows],
+                "month": ["Aug"] * len(rows),
+                "contract_month_yr": ["Q26"] * len(rows),
+                "contract_year": [2026] * len(rows),
+                "PX_LAST": [row[2] for row in rows],
+            }
+        )
+        payload = build_embedded_data(
+            frame,
+            "cpg",
+            "date",
+            "security_str",
+            "PX_LAST",
+            "CLEAN_NAME",
+            code_col="security_prefix",
+            contract_col="contract_month_yr",
+            contract_year_col="contract_year",
+            month_col="month",
+            frequency_col="frequency",
+            reference_col="reference",
+            px_last_col="PX_LAST",
+        )
+
+        def unpack(reference: int) -> tuple[list[int], list[float]]:
+            series = payload["commodities"][f"WU::Aug::{reference}"]["years"]["2026"]
+            if isinstance(series, list):
+                return payload["meta"]["yearX"]["2026"], series
+            return payload["meta"]["xPool"][series["x_ref"]], series["y"]
+
+        reference_one_x, reference_one_y = unpack(1)
+        reference_two_x, reference_two_y = unpack(2)
+        self.assertEqual(payload["meta"]["years"], [2026])
+        self.assertEqual(reference_one_x, [247, 429])
+        self.assertEqual(reference_two_x, reference_one_x)
+        self.assertEqual(reference_one_y, [10.0, 11.0])
+        self.assertEqual(reference_two_y, [20.0, 21.0])
 
     def test_standalone_and_external_js_contain_one_compressed_payload(self) -> None:
         summary = self._export()

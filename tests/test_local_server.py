@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import json
+import threading
+import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from app.local_server import create_server
+
+
+class LocalServerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.server = create_server("127.0.0.1", 0)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def json_request(self, path: str, *, method: str = "GET"):
+        request = Request(
+            self.base_url + path,
+            method=method,
+            headers={"Accept": "application/json", "Origin": self.base_url},
+        )
+        with urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read())
+
+    def test_status_exposes_api_but_disables_update_without_blpapi(self) -> None:
+        with patch("app.local_server.bloomberg_client.is_bloomberg_available", return_value=False):
+            status, payload = self.json_request("/api/update/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["update_api"])
+        self.assertFalse(payload["available"])
+        self.assertIn("blpapi", payload["message"])
+
+    def test_static_dashboard_is_served_from_fixed_root(self) -> None:
+        with urlopen(self.base_url + "/", timeout=5) as response:
+            html = response.read().decode("utf-8")
+        self.assertIn("Pricing Dashboard", html)
+        self.assertIn('id="data-update"', html)
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(self.base_url + "/../../README.md", timeout=5)
+        self.assertEqual(raised.exception.code, 404)
+
+    def test_post_runs_fixed_update_and_returns_summary(self) -> None:
+        result = {"ok": True, "success": True, "message": "Update complete", "rows": 42}
+        with (
+            patch("app.local_server.bloomberg_client.is_bloomberg_available", return_value=True),
+            patch("app.local_server.update_pipeline.run_bloomberg_update", return_value=result) as update,
+        ):
+            status, payload = self.json_request("/api/update", method="POST")
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["rows"], 42)
+        update.assert_called_once_with()
+
+    def test_concurrent_post_returns_409(self) -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_update():
+            started.set()
+            release.wait(timeout=5)
+            return {"ok": True, "success": True, "message": "Update complete"}
+
+        first_result = {}
+
+        def first_request():
+            first_result["response"] = self.json_request("/api/update", method="POST")
+
+        with (
+            patch("app.local_server.bloomberg_client.is_bloomberg_available", return_value=True),
+            patch("app.local_server.update_pipeline.run_bloomberg_update", side_effect=blocking_update),
+        ):
+            first = threading.Thread(target=first_request)
+            first.start()
+            self.assertTrue(started.wait(timeout=2))
+            request = Request(
+                self.base_url + "/api/update",
+                method="POST",
+                headers={"Accept": "application/json", "Origin": self.base_url},
+            )
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(request, timeout=5)
+            self.assertEqual(raised.exception.code, 409)
+            release.set()
+            first.join(timeout=5)
+        self.assertEqual(first_result["response"][0], 200)
+
+    def test_non_loopback_bind_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            create_server("0.0.0.0", 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

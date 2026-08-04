@@ -207,7 +207,7 @@ def main() -> int:
     for key, value in resolved.items():
         print(f"  {key:18s}: {value or '--'}")
 
-    required = ["date", "security_str", "px_last"]
+    required = ["date", "security_str", "security_prefix", "px_last"]
     missing_required = [key for key in required if not resolved[key]]
     if missing_required:
         print("\nERROR: Missing required columns:")
@@ -410,7 +410,7 @@ def main() -> int:
             )
         missing_data = sorted(configured_roots - data_roots)
         if missing_data:
-            warnings.append(
+            issues.append(
                 "enabled workbook roots have no rows in this data file: " + ", ".join(missing_data)
             )
 
@@ -441,6 +441,18 @@ def main() -> int:
                     issues.append(
                         f"{suffix_mismatches} rows for {root} do not use workbook yellow_key "
                         f"{configured.yellow_key}."
+                    )
+
+                root_mismatches = root_df.filter(
+                    ~pl.col(security_col)
+                    .cast(pl.Utf8)
+                    .str.to_uppercase()
+                    .str.starts_with(root)
+                ).height
+                if root_mismatches:
+                    issues.append(
+                        f"{root_mismatches} rows use security_prefix {root} but their ticker "
+                        f"does not start with {root}."
                     )
 
     if warnings:

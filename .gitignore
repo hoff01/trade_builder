@@ -11,6 +11,8 @@ node_modules
 dist/*
 !dist/pricing_dashboard_trade_builder.html
 !dist/pricing_data.parquet
+!dist/pricing_data.csv.gz
+!dist/update_manifest.json
 dist-ssr
 *.local
 .vite
@@ -32,6 +34,8 @@ __pycache__/
 # Generated dashboard payloads
 app/static/dashboard_export.html
 app/static/embedded_data.js
+data/pricing_history.csv
+.pricing-update-*/
 
 # Local Python environments and test caches
 .venv/

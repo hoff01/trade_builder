@@ -1,6 +1,79 @@
 # Pricing Dashboard — Trade Builder
 
-This repository is the standalone trade-builder portion of `Pricing_Dashboard`. It contains only the production pricing surface; Basis, Margins, Options/Liquidity, and Colonial are intentionally excluded.
+This repository is the standalone trade-builder portion of `Pricing_Dashboard`. Basis, Margins, Options/Liquidity, and Colonial are intentionally excluded.
+
+The owner dashboard can now update itself from Bloomberg Desktop API. Pressing **UPDATE DATA** runs one fixed local pipeline:
+
+```text
+security_roots.xlsx
+        ↓
+Bloomberg Desktop API at localhost:8194
+        ↓
+rounded canonical CSV
+        ↓
+compressed CSV + Zstandard Parquet + embedded browser data
+        ↓
+portable standalone HTML + verification manifest
+```
+
+The update action exists only in the local owner server. The exported HTML remains offline, contains no Bloomberg credentials or API code, and does all trade math and unit conversion in browser JavaScript.
+
+## Owner setup on the Bloomberg workstation
+
+Bloomberg Terminal must be open and logged in on the licensed Windows computer.
+
+```bat
+py -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements-bloomberg.txt
+UPDATE_AND_OPEN.bat
+```
+
+Then press **UPDATE DATA** in the dashboard. The button stays hidden in a downloaded `file://` export and appears only when the local owner server is running.
+
+The macOS launcher is `START_PRICING_DASHBOARD.command`. It is useful for dashboard development, but a normal Bloomberg Professional Desktop API session is expected to run on the licensed Bloomberg Windows workstation.
+
+For a manual update:
+
+```bash
+python3 scripts/update_from_bloomberg.py
+```
+
+Use `--full` to discard the incremental cache and re-pull the complete configured history. Normal updates re-pull only active contracts from their last stored date minus the configured overlap, while retaining completed history.
+
+## Complete the live dashboard
+
+1. Edit every enabled row in `config/security_roots.xlsx`: verify `root`, `common_name`, `yellow_key`, `native_unit`, conversion factors, and `ticker_template` against Bloomberg FLDS/security lookup.
+2. Review the **Bloomberg Update** sheet: dates, delivery-year range, history months, reference depth, and requested fields.
+3. On the licensed Windows workstation, open and log in to Bloomberg Terminal.
+4. Install `requirements-bloomberg.txt`, then run `UPDATE_AND_OPEN.bat`.
+5. Run one full pull after changing ticker formats, yellow keys, fields, history depth, or the start date:
+
+   ```bat
+   .venv\Scripts\python.exe scripts\update_from_bloomberg.py --full
+   ```
+
+6. Open the local dashboard and test all three workspaces, every configured root, unit conversion, price field, VaR, and CSV export.
+7. Check `dist/update_manifest.json`: status must be `complete`, every enabled root must appear under `root_coverage`, and warnings must be understood.
+8. Copy `dist/pricing_dashboard_trade_builder.html`, `dist/pricing_data.csv.gz`, and `dist/pricing_data.parquet` to a machine without Bloomberg and verify the portable handoff.
+
+After the first full pull, use **UPDATE DATA** for normal incremental refreshes.
+
+## Shareable export package
+
+A successful update publishes all files from the same validated CSV snapshot:
+
+- `data/pricing_history.csv` — full, plain owner-side Bloomberg history; intentionally ignored by Git because it can be large.
+- `dist/pricing_data.csv.gz` — full five-decimal CSV compressed for sharing and spreadsheet/BI use.
+- `dist/pricing_data.parquet` — memory-efficient Zstandard Parquet for analytical use.
+- `dist/pricing_dashboard_trade_builder.html` — portable, self-contained dashboard.
+- `dist/update_manifest.json` — row counts, per-root coverage and freshness, fields, hashes, sizes, warnings, and lineage.
+- `app/static/embedded_data.js` — compressed local-browser snapshot.
+
+Recipients can open the HTML and use the dashboard without Bloomberg, Python, a server, or internet access. They can also decompress `pricing_data.csv.gz` or read the companion Parquet directly. Confirm that the intended recipient group is permitted to receive Bloomberg-derived data under your firm’s Bloomberg entitlements and redistribution terms.
+
+Publication is transactional. Bloomberg connection failures, request timeouts, invalid roots, incomplete enabled-root coverage, schema failures, Parquet/CSV mismatches, or an oversized HTML export leave the prior successful package untouched.
+
+## Trade Builder workspaces
 
 The dashboard has three separate workspaces:
 
@@ -8,101 +81,53 @@ The dashboard has three separate workspaces:
 2. **Prebuilt** — named structures with a simple month selector.
 3. **Multi-Leg (Custom)** — up to eight independently weighted legs.
 
-All trade arithmetic, per-leg unit conversion, VaR calculations, and chart updates run in browser JavaScript. The final HTML does not need Python, FastAPI, or a database.
-
-## Fast start
-
-### macOS/Linux
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python scripts/validate_pricing_data.py data/sample_market_data.parquet
-.venv/bin/python scripts/build_dashboard.py
-open dist/pricing_dashboard_trade_builder.html
-```
-
-### Windows
-
-```bat
-py -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe scripts\validate_pricing_data.py data\sample_market_data.parquet
-.venv\Scripts\python.exe scripts\build_dashboard.py
-start "" dist\pricing_dashboard_trade_builder.html
-```
-
-The build produces:
-
-- `dist/pricing_dashboard_trade_builder.html` — one portable, self-contained dashboard.
-- `dist/pricing_data.parquet` — rounded, Zstandard-compressed audit/handoff data.
-- `app/static/embedded_data.js` — compressed data for local template development.
-
-The latest verified standalone HTML and companion Parquet are committed in `dist/`, so a user can download and open the dashboard without running a server. Rebuild both after changing data or the security-root workbook.
+All per-leg unit conversion occurs before ratios are applied, so mixed-unit trades are valid. The four supported price sources are `PX_LAST`, `PX_CLOSE`, `PX_SETTLE`, and `PX_FAIR_1430` when Bloomberg returns them.
 
 ## Add or change a security root
 
-Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **Security Roots** sheet. Each row controls one Bloomberg root without a Python or JavaScript edit.
-
-Required fields:
+Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **Security Roots** sheet. One row controls one Bloomberg root without a Python or JavaScript edit.
 
 | Field | Purpose | Example |
 |---|---|---|
-| `enabled` | Include the root in the build | `TRUE` |
+| `enabled` | Include the root in Bloomberg and the export | `TRUE` |
 | `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO` |
-| `display_name` | Dashboard label | `GC Jet`, `Heating Oil` |
+| `common_name` | Authoritative label used everywhere in the dashboard and exports | `GC Jet`, `Heating Oil` |
 | `yellow_key` | Bloomberg security type | `Comdty` or `Index` |
-| `native_unit` | Unit of the source prices | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
+| `native_unit` | Native Bloomberg quote unit | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
 | `bbl_per_mt` | Product density conversion | `7.45` |
 | `gal_per_bbl` | Gallons per barrel | `42` |
-| `ticker_template` | Contract construction rule | `{root}{month_code}{yy} {yellow_key}` |
+| `ticker_template` | Contract construction rule and year style | `{root}{month_code}{y} {yellow_key}` |
 | `tradingview_symbol` | Optional external symbol | `NYMEX:HO` |
-| `aliases` | Optional old roots/names separated by `|` | `ME|GC JET` |
-| `product_group` | Right-sidebar grouping metadata | `Refined Products` |
+| `aliases` | Old roots/names separated by `|` | `ME|GC JET` |
+| `product_group` | Sidebar grouping | `Refined Products` |
 | `sort_order` | Display order | `10` |
 
-The workbook already includes `WU` for GC Jet and `HO` for Heating Oil. Dropdowns constrain yellow keys and units. A review-friendly mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
+The workbook already includes `WU` for GC Jet and `HO` for Heating Oil. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key and unit fields use dropdowns. Existing files that still use `display_name` remain supported. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
 
-After editing the workbook:
+The **Bloomberg Update** sheet controls:
 
-```bash
-python3 scripts/validate_pricing_data.py /path/to/pricing.parquet \
-  --config config/security_roots.xlsx
+- earliest retained history date;
+- first and last delivery years;
+- history months requested before each delivery;
+- maximum dated-contract reference depth;
+- incremental overlap days;
+- requested Bloomberg fields;
+- Bloomberg host, port, and service;
+- batch size and per-request timeout;
+- maximum standalone HTML size.
 
-python3 scripts/build_dashboard.py \
-  --data /path/to/pricing.parquet \
-  --config config/security_roots.xlsx
-```
+The year placeholder and yellow key are independent:
 
-The validator stops on duplicate roots, invalid units or yellow keys, missing conversion factors, mismatched Bloomberg suffixes, unconfigured data roots, inconsistent root factors, duplicate price keys, or values with more than five decimal places.
+- `{root}{month_code}{y} {yellow_key}` generates `HOG6 Comdty` for February 2026 Heating Oil.
+- Replace `{y}` with `{yy}` to generate `HOG26 Comdty`.
+- Replace `{y}` with `{year}` to generate `HOG2026 Comdty`.
+- Change `yellow_key` from `Comdty` to `Index` to make the same ticker end in `Index`.
 
-## Pricing data contract
-
-Parquet is the canonical input. CSV and IPC are accepted for transition work, but the build always emits compact Parquet.
-
-Required columns:
-
-- `date`
-- `security_str` or `FUT_CUR_GEN_TICKER`
-- `security_prefix` or another configured root column
-- `PX_LAST`
-
-Recommended columns:
-
-- `PX_CLOSE`, `PX_SETTLE`, `PX_FAIR_1430`
-- `CLEAN_NAME`
-- `month`, `contract_month_yr`, `contract_year`
-- `frequency`, `reference`
-- `VOL_30D`, `PX_VOLUME`
-- `bbl_per_mt`, `gal_per_bbl`
-
-The root must match the spreadsheet exactly. Contract strings such as `WUF26 Comdty` and `HOF26 Comdty` are supported.
+The standard workbook uses Bloomberg-style one-digit years. Each root can use its own template and yellow key.
 
 ## Unit conversion contract
 
-Each leg is converted from its own configured native unit into the selected dashboard unit before ratios are applied. Mixed-unit trades are therefore valid.
-
-The browser uses these relationships:
+Each leg is converted from its configured native unit into the selected dashboard unit before ratios are applied:
 
 ```text
 cpg -> $/gal = value / 100
@@ -112,27 +137,28 @@ $/bbl -> $/MT = value * bbl_per_mt
 
 The same path is reversed for target-unit conversion. Spreadsheet formula strings are never evaluated.
 
-## Precision and export behavior
+## Precision and memory behavior
 
-- Every source/export float is capped at five decimal places.
-- The compact companion Parquet uses Zstandard compression.
-- The portable HTML contains one gzip-compressed payload; it does not duplicate raw JSON.
-- `built_at` and `data_max_date` are separate, so rebuilding cannot make stale prices appear current.
-- Plotly, theme code, trade math, and data are inlined in the portable HTML. The optional TradingView button is the only feature that intentionally opens an external service.
+- CSV, Parquet, embedded data, and calculated downloads are capped at five decimal places.
+- Parquet uses Zstandard compression and bounded row groups.
+- The full handoff CSV is gzip-compressed instead of duplicated raw in the HTML.
+- The portable HTML contains one gzip-compressed data payload and vendors Plotly, theme code, and trade math.
+- `built_at` and `data_max_date` remain separate, so rebuilding cannot make stale prices appear current.
+- The default 20 MB standalone-file budget fails visibly if a data expansion becomes too large.
 
-To keep only selected price fields:
+## Build without Bloomberg
 
-```bash
-python3 scripts/build_dashboard.py --fields PX_LAST,PX_SETTLE
-```
-
-Volume and precomputed 30-day volatility arrays are excluded by default to keep the portable file lean. Include them only when needed:
+The committed sample is deterministic and exercises CL, CO, HO, RB, QS, and WU in their native units.
 
 ```bash
-python3 scripts/build_dashboard.py --include-analytics
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python scripts/validate_pricing_data.py data/sample_market_data.parquet
+.venv/bin/python scripts/build_dashboard.py
+open dist/pricing_dashboard_trade_builder.html
 ```
 
-The default build also enforces a 20 MB standalone-file budget so an unexpected data expansion fails visibly instead of producing an oversized handoff.
+`scripts/build_dashboard.py` accepts CSV or Parquet and writes the standalone HTML, compact Parquet, and local embedded snapshot. The Bloomberg updater is the path that additionally writes the canonical CSV, compressed CSV, and manifest.
 
 ## Verification
 
@@ -144,12 +170,4 @@ python3 scripts/validate_pricing_data.py data/sample_market_data.parquet
 python3 scripts/build_dashboard.py
 ```
 
-No `npm install` is needed: JavaScript checks use Node's built-in test runner and the dashboard vendors its browser dependencies.
-
-## Regenerate the sample
-
-```bash
-python3 scripts/generate_mock_market_data.py
-```
-
-The generated sample includes CL, CO, HO, RB, QS, and WU, with native quote units chosen to exercise all conversion paths.
+The automated suite covers spreadsheet ticker expansion, Comdty/Index suffixes, Bloomberg partial/final events and failure cleanup, dated references, incremental merge behavior, five-decimal artifacts, CSV/Parquet parity, single-flight update requests, offline boundaries, and rollback after a late export failure.

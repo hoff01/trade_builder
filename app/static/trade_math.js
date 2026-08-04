@@ -217,6 +217,7 @@
         if (!rootValue || !monthCode || !fullYear) return '';
         const yellowKey = String(settings.yellow_key || settings.yellowKey || '').trim();
         const yy = String(fullYear).slice(-2).padStart(2, '0');
+        const y = String(fullYear).slice(-1);
         const values = {
             root: rootValue,
             security_root: rootValue,
@@ -225,11 +226,13 @@
             contract_month_code: monthCode,
             year: String(fullYear),
             yyyy: String(fullYear),
+            y,
+            year_1d: y,
+            year_digit: y,
             yy,
             year2: yy,
             year_2d: yy,
             year_short: yy,
-            year_digit: String(fullYear).slice(-1),
             yellow_key: yellowKey,
             yellowKey
         };
