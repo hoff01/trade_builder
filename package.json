@@ -1,0 +1,8 @@
+{
+  "name": "pricing-dashboard-trade-builder",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check app/static/trade_math.js && node --check app/static/app.js"
+  }
+}

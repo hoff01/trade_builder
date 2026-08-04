@@ -1,0 +1,39 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist/*
+!dist/pricing_dashboard_trade_builder.html
+!dist/pricing_data.parquet
+dist-ssr
+*.local
+.vite
+_backup
+__pycache__/
+*.pyc
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Generated dashboard payloads
+app/static/dashboard_export.html
+app/static/embedded_data.js
+
+# Local Python environments and test caches
+.venv/
+.pytest_cache/
+.coverage
