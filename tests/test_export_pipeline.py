@@ -36,6 +36,7 @@ class ExportPipelineTests(unittest.TestCase):
                 7.45,
                 42,
                 "{root}{month_code}{yy} {yellow_key}",
+                "Monthly",
                 "NYMEX:WU1!",
                 "ME",
                 "Refined Products",
@@ -50,6 +51,7 @@ class ExportPipelineTests(unittest.TestCase):
                 7.45,
                 42,
                 "{root}{month_code}{yy} {yellow_key}",
+                "Monthly",
                 "NYMEX:HO1!",
                 "",
                 "Refined Products",
@@ -264,6 +266,54 @@ class ExportPipelineTests(unittest.TestCase):
         self.assertEqual(reference_one_y, [10.0, 11.0])
         self.assertEqual(reference_two_y, [20.0, 21.0])
 
+    def test_flat_curve_exports_one_monthless_calendar_series(self) -> None:
+        frame = pl.DataFrame(
+            {
+                "date": [date(2025, 12, 31), date(2026, 1, 2)],
+                "security_str": ["RVO Index", "RVO Index"],
+                "security_prefix": ["RVO", "RVO"],
+                "CLEAN_NAME": ["RVO", "RVO"],
+                "frequency": ["Flat", "Flat"],
+                "reference": [1, 1],
+                "month": ["", ""],
+                "contract_month_yr": ["", ""],
+                "contract_year": [None, None],
+                "PX_LAST": [18.1234567, 19.7654321],
+            }
+        )
+        payload = build_embedded_data(
+            frame,
+            "cpg",
+            "date",
+            "security_str",
+            "PX_LAST",
+            "CLEAN_NAME",
+            code_col="security_prefix",
+            contract_col="contract_month_yr",
+            contract_year_col="contract_year",
+            month_col="month",
+            frequency_col="frequency",
+            reference_col="reference",
+            px_last_col="PX_LAST",
+            root_config_by_code={
+                "RVO": {
+                    "root": "RVO",
+                    "display_name": "RVO",
+                    "curve_mode": "flat",
+                    "native_unit": "cpg",
+                    "bbl_per_mt": 7.45,
+                    "gal_per_bbl": 42,
+                }
+            },
+        )
+
+        self.assertEqual(len(payload["commodities"]), 1)
+        commodity = next(iter(payload["commodities"].values()))
+        self.assertEqual(commodity["contract_month"], "")
+        self.assertEqual(commodity["frequency"], "Flat")
+        self.assertEqual(set(commodity["years"]), {"2025", "2026"})
+        self.assertEqual(payload["meta"]["root_config"]["RVO"]["curve_mode"], "flat")
+
     def test_standalone_and_external_js_contain_one_compressed_payload(self) -> None:
         summary = self._export()
         html = self.output_path.read_text(encoding="utf-8")
@@ -274,6 +324,7 @@ class ExportPipelineTests(unittest.TestCase):
         self.assertNotIn('id="embedded-data-raw"', html)
         self.assertNotIn("|| {{}}", html)
         self.assertNotIn("<script src=", html)
+        self.assertIn("window.DASHBOARD_OWNER_UPDATE_API = false;", html)
         self.assertIn("DecompressionStream", html)
         self.assertIn("payloadElement.remove()", html)
         self.assertIn("meta?.xPool", html)
@@ -295,6 +346,24 @@ class ExportPipelineTests(unittest.TestCase):
         compact = pl.read_parquet(self.parquet_path)
         self.assertNotIn("PX_CLOSE", compact.columns)
         self.assertNotIn("PX_FAIR_1430", compact.columns)
+
+    def test_parquet_can_retain_full_fields_while_dashboard_stays_lean(self) -> None:
+        full_fields = "PX_LAST,PX_CLOSE,PX_SETTLE,PX_FAIR_1430"
+        summary = self._export(fields="PX_LAST", parquet_fields=full_fields)
+        payload = self._payload()
+        compact = pl.read_parquet(self.parquet_path)
+
+        self.assertEqual(summary["fields"], ["PX_LAST"])
+        self.assertEqual(
+            summary["parquet_fields"],
+            ["PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"],
+        )
+        self.assertEqual(payload["meta"]["fields"]["available"], ["PX_LAST"])
+        self.assertTrue(
+            {"PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"}.issubset(
+                compact.columns
+            )
+        )
 
     def test_unconfigured_root_and_size_budget_fail_actionably(self) -> None:
         unconfigured = pl.read_parquet(self.data_path).with_columns(

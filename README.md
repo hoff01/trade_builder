@@ -42,11 +42,11 @@ Use `--full` to discard the incremental cache and re-pull the complete configure
 
 ## Complete the live dashboard
 
-1. Edit every enabled row in `config/security_roots.xlsx`: verify `root`, `common_name`, `yellow_key`, `native_unit`, conversion factors, and `ticker_template` against Bloomberg FLDS/security lookup.
-2. Review the **Bloomberg Update** sheet: dates, delivery-year range, history months, reference depth, and requested fields.
+1. Edit every enabled row in `config/security_roots.xlsx`: verify `root`, `common_name`, `yellow_key`, `native_unit`, conversion factors, `ticker_template`, and `curve_mode` against Bloomberg FLDS/security lookup.
+2. Review the **Bloomberg Update** sheet: dates, delivery-year range, history months, reference depth, full-data `fields`, and lightweight `dashboard_fields`.
 3. On the licensed Windows workstation, open and log in to Bloomberg Terminal.
 4. Install `requirements-bloomberg.txt`, then run `UPDATE_AND_OPEN.bat`.
-5. Run one full pull after changing ticker formats, yellow keys, fields, history depth, or the start date:
+5. Run one full pull after changing ticker formats, yellow keys, curve modes, fields, history depth, or the start date:
 
    ```bat
    .venv\Scripts\python.exe scripts\update_from_bloomberg.py --full
@@ -81,7 +81,7 @@ The dashboard has three separate workspaces:
 2. **Prebuilt** — named structures with a simple month selector.
 3. **Multi-Leg (Custom)** — up to eight independently weighted legs.
 
-All per-leg unit conversion occurs before ratios are applied, so mixed-unit trades are valid. The four supported price sources are `PX_LAST`, `PX_CLOSE`, `PX_SETTLE`, and `PX_FAIR_1430` when Bloomberg returns them.
+All per-leg unit conversion occurs before ratios are applied, so mixed-unit trades are valid. The four supported price sources are `PX_LAST`, `PX_CLOSE`, `PX_SETTLE`, and `PX_FAIR_1430` when Bloomberg returns them and they are listed in `dashboard_fields`. The default portable dashboard embeds only `PX_LAST`; the companion CSV and Parquet retain every requested `fields` value.
 
 ## Add or change a security root
 
@@ -90,19 +90,22 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 | Field | Purpose | Example |
 |---|---|---|
 | `enabled` | Include the root in Bloomberg and the export | `TRUE` |
-| `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO` |
+| `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO`, `RVO` |
 | `common_name` | Authoritative label used everywhere in the dashboard and exports | `GC Jet`, `Heating Oil` |
 | `yellow_key` | Bloomberg security type | `Comdty` or `Index` |
 | `native_unit` | Native Bloomberg quote unit | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
 | `bbl_per_mt` | Product density conversion | `7.45` |
 | `gal_per_bbl` | Gallons per barrel | `42` |
 | `ticker_template` | Contract construction rule and year style | `{root}{month_code}{y} {yellow_key}` |
+| `curve_mode` | `Monthly` builds dated contracts; `Flat` pulls one monthless daily series | `Monthly`, `Flat` |
 | `tradingview_symbol` | Optional external symbol | `NYMEX:HO` |
 | `aliases` | Old roots/names separated by `|` | `ME|GC JET` |
 | `product_group` | Sidebar grouping | `Refined Products` |
 | `sort_order` | Display order | `10` |
 
-The workbook already includes `WU` for GC Jet and `HO` for Heating Oil. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key and unit fields use dropdowns. Existing files that still use `display_name` remain supported. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
+The workbook already includes `WU` for GC Jet, `HO` for Heating Oil, and `RVO` as the monthless `RVO Index`. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key, unit, and curve mode fields use dropdowns. Existing files that still use `display_name` or have no `curve_mode` column remain supported; missing curve modes default to `Monthly`. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
+
+For `curve_mode=Flat`, the updater requests only the configured undated Bloomberg ticker. The trade leg has no month selector. JavaScript uses that date's observation unchanged for every point on the selected forward curve, so RVO does not acquire an artificial monthly shape.
 
 The **Bloomberg Update** sheet controls:
 
@@ -111,7 +114,8 @@ The **Bloomberg Update** sheet controls:
 - history months requested before each delivery;
 - maximum dated-contract reference depth;
 - incremental overlap days;
-- requested Bloomberg fields;
+- `fields`, the Bloomberg fields retained in the full CSV and Parquet;
+- `dashboard_fields`, the smaller subset embedded in the portable dashboard and shown in its price-source selector;
 - Bloomberg host, port, and service;
 - batch size and per-request timeout;
 - maximum standalone HTML size.
@@ -122,6 +126,7 @@ The year placeholder and yellow key are independent:
 - Replace `{y}` with `{yy}` to generate `HOG26 Comdty`.
 - Replace `{y}` with `{year}` to generate `HOG2026 Comdty`.
 - Change `yellow_key` from `Comdty` to `Index` to make the same ticker end in `Index`.
+- `{root} {yellow_key}` with `curve_mode=Flat` generates one `RVO Index` request with no month or year suffix.
 
 The standard workbook uses Bloomberg-style one-digit years. Each root can use its own template and yellow key.
 
@@ -142,13 +147,15 @@ The same path is reversed for target-unit conversion. Spreadsheet formula string
 - CSV, Parquet, embedded data, and calculated downloads are capped at five decimal places.
 - Parquet uses Zstandard compression and bounded row groups.
 - The full handoff CSV is gzip-compressed instead of duplicated raw in the HTML.
-- The portable HTML contains one gzip-compressed data payload and vendors Plotly, theme code, and trade math.
+- The portable HTML contains one gzip-compressed data payload and vendors Plotly's official basic bundle, theme code, and trade math.
+- `dashboard_fields` can keep the portable browser payload lean without removing fields from the full CSV or Parquet.
+- The local owner server revalidates cached static assets while keeping update API responses uncached.
 - `built_at` and `data_max_date` remain separate, so rebuilding cannot make stale prices appear current.
 - The default 20 MB standalone-file budget fails visibly if a data expansion becomes too large.
 
 ## Build without Bloomberg
 
-The committed sample is deterministic and exercises CL, CO, HO, RB, QS, and WU in their native units.
+The committed sample is deterministic and exercises CL, CO, HO, RB, QS, WU, and the monthless RVO flat curve in their native units.
 
 ```bash
 python3 -m venv .venv

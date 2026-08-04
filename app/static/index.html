@@ -446,6 +446,10 @@
             gap: 3px;
             min-height: 44px;
         }
+        .leg-cell.is-monthless-placeholder {
+            visibility: hidden;
+            pointer-events: none;
+        }
         .leg-label {
             font-size: 9px;
             color: var(--text-gray-400);
@@ -1016,12 +1020,7 @@
             </div>
 
             <div class="field-toggle mb-4">
-                <select id="field-select" class="field-select">
-                    <option value="last">PX Last</option>
-                    <option value="close">PX Close</option>
-                    <option value="settle">PX Settle</option>
-                    <option value="fair">14:30 Fair Value</option>
-                </select>
+                <select id="field-select" class="field-select" aria-label="Price Source"></select>
             </div>
 
             <div class="section-header">

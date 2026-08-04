@@ -23,12 +23,23 @@ ROOT_COLUMNS = (
     "bbl_per_mt",
     "gal_per_bbl",
     "ticker_template",
+    "curve_mode",
     "tradingview_symbol",
     "aliases",
     "product_group",
     "sort_order",
 )
 VALID_YELLOW_KEYS = {"comdty": "Comdty", "index": "Index"}
+CURVE_MODE_ALIASES = {
+    "monthly": "monthly",
+    "dated": "monthly",
+    "futures": "monthly",
+    "contract": "monthly",
+    "flat": "flat",
+    "flatforward": "flat",
+    "monthless": "flat",
+    "spot": "flat",
+}
 VALID_UNITS = ("cpg", "$/gal", "$/bbl", "$/MT")
 UNIT_ALIASES = {
     "cpg": "cpg",
@@ -52,6 +63,7 @@ TRUE_VALUES = {"1", "true", "yes", "y", "on", "enabled"}
 FALSE_VALUES = {"0", "false", "no", "n", "off", "disabled"}
 ROOT_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9._-]*$")
 FIELD_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+DASHBOARD_PRICE_FIELDS = ("PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430")
 
 
 class ConfigValidationError(ValueError):
@@ -72,6 +84,7 @@ class SecurityRoot:
     bbl_per_mt: float
     gal_per_bbl: float
     ticker_template: str
+    curve_mode: str
     tradingview_symbol: str
     aliases: tuple[str, ...]
     product_group: str
@@ -95,6 +108,7 @@ class SecurityRoot:
             "bbl_per_mt": self.bbl_per_mt,
             "gal_per_bbl": self.gal_per_bbl,
             "ticker_template": self.ticker_template,
+            "curve_mode": self.curve_mode,
             "tradingview_symbol": self.tradingview_symbol,
             "aliases": list(self.aliases),
             "product_group": self.product_group,
@@ -113,6 +127,7 @@ class UpdateSettings:
     reference_depth: int
     overlap_days: int
     fields: tuple[str, ...]
+    dashboard_fields: tuple[str, ...]
     host: str
     port: int
     service: str
@@ -129,6 +144,7 @@ class UpdateSettings:
             "reference_depth": self.reference_depth,
             "overlap_days": self.overlap_days,
             "fields": list(self.fields),
+            "dashboard_fields": list(self.dashboard_fields),
             "host": self.host,
             "port": self.port,
             "service": self.service,
@@ -148,6 +164,7 @@ def default_update_settings() -> UpdateSettings:
         reference_depth=2,
         overlap_days=7,
         fields=("PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"),
+        dashboard_fields=("PX_LAST",),
         host="localhost",
         port=8194,
         service="//blp/refdata",
@@ -198,6 +215,15 @@ class RootConfig:
 def normalize_unit(value: object) -> str:
     text = str(value or "").strip().lower().replace(" ", "").replace("_", "")
     return UNIT_ALIASES.get(text, "")
+
+
+def normalize_curve_mode(value: object) -> str:
+    """Return the canonical root curve behavior, defaulting legacy rows to monthly."""
+
+    text = str(value or "").strip().lower().replace(" ", "").replace("_", "").replace("-", "")
+    if not text:
+        return "monthly"
+    return CURVE_MODE_ALIASES.get(text, "")
 
 
 def _parse_enabled(value: object, row_number: int, issues: list[str]) -> bool:
@@ -277,12 +303,17 @@ def _read_xlsx_rows(path: Path) -> list[tuple[int, dict[str, Any]]]:
 
 
 def _missing_root_columns(headers: Iterable[str]) -> list[str]:
-    """Require the current schema while accepting legacy display_name files."""
+    """Require the stable schema while accepting legacy name and curve files."""
 
     available = set(headers)
     missing = [column for column in ROOT_COLUMNS if column not in available]
     if "common_name" in missing and "display_name" in available:
         missing.remove("common_name")
+    # curve_mode was added after the first workbook release. Missing values are
+    # intentionally interpreted as monthly so existing user spreadsheets keep
+    # working without a migration.
+    if "curve_mode" in missing:
+        missing.remove("curve_mode")
     return missing
 
 
@@ -390,6 +421,40 @@ def _read_update_settings(path: Path) -> UpdateSettings:
             f"{UPDATE_SHEET_NAME}: unsupported field names: {', '.join(invalid_fields)}"
         )
 
+    # Existing workbooks without this setting retain their prior behavior.
+    # The generated workbook opts into the lean PX_LAST-only browser payload.
+    dashboard_fields_raw = values.get("dashboard_fields")
+    if dashboard_fields_raw in (None, ""):
+        dashboard_fields = tuple(
+            field for field in fields if field in DASHBOARD_PRICE_FIELDS
+        )
+    else:
+        dashboard_fields = tuple(
+            dict.fromkeys(
+                token.strip().upper()
+                for token in re.split(r"[,;|]", str(dashboard_fields_raw))
+                if token.strip()
+            )
+        )
+    if not dashboard_fields:
+        issues.append(f"{UPDATE_SHEET_NAME}: dashboard_fields must include PX_LAST")
+    elif "PX_LAST" not in dashboard_fields:
+        issues.append(f"{UPDATE_SHEET_NAME}: dashboard_fields must include PX_LAST")
+    unsupported_dashboard_fields = [
+        item for item in dashboard_fields if item not in DASHBOARD_PRICE_FIELDS
+    ]
+    if unsupported_dashboard_fields:
+        issues.append(
+            f"{UPDATE_SHEET_NAME}: unsupported dashboard_fields: "
+            + ", ".join(unsupported_dashboard_fields)
+        )
+    missing_requested_fields = [item for item in dashboard_fields if item not in fields]
+    if missing_requested_fields:
+        issues.append(
+            f"{UPDATE_SHEET_NAME}: dashboard_fields must also appear in fields: "
+            + ", ".join(missing_requested_fields)
+        )
+
     host = str(values.get("host", defaults.host) or "").strip()
     service = str(values.get("service", defaults.service) or "").strip()
     if not host:
@@ -418,6 +483,7 @@ def _read_update_settings(path: Path) -> UpdateSettings:
         reference_depth=reference_depth,
         overlap_days=overlap_days,
         fields=fields,
+        dashboard_fields=dashboard_fields,
         host=host,
         port=port,
         service=service,
@@ -458,6 +524,7 @@ def load_root_config(path: str | Path) -> RootConfig:
         bbl_per_mt = _positive_float(row.get("bbl_per_mt"), "bbl_per_mt", row_number, issues)
         gal_per_bbl = _positive_float(row.get("gal_per_bbl"), "gal_per_bbl", row_number, issues)
         ticker_template = str(row.get("ticker_template") or "").strip()
+        curve_mode = normalize_curve_mode(row.get("curve_mode"))
         aliases = _split_aliases(row.get("aliases"))
         product_group = str(row.get("product_group") or "Other").strip() or "Other"
 
@@ -477,13 +544,17 @@ def load_root_config(path: str | Path) -> RootConfig:
             issues.append(
                 f"row {row_number}: native_unit must be one of {', '.join(VALID_UNITS)}"
             )
-        required_tokens = ("{root}", "{month_code}", "{yellow_key}")
+        if not curve_mode:
+            issues.append(f"row {row_number}: curve_mode must be Monthly or Flat")
+        required_tokens = ["{root}", "{yellow_key}"]
+        if curve_mode != "flat":
+            required_tokens.append("{month_code}")
         missing_tokens = [token for token in required_tokens if token not in ticker_template]
         year_tokens = (
             "{y}", "{year_1d}", "{year_digit}",
             "{yy}", "{year_2d}", "{year}", "{yyyy}",
         )
-        if not any(token in ticker_template for token in year_tokens):
+        if curve_mode != "flat" and not any(token in ticker_template for token in year_tokens):
             missing_tokens.append("{y} (or {yy}/{year})")
         if missing_tokens:
             issues.append(
@@ -509,6 +580,7 @@ def load_root_config(path: str | Path) -> RootConfig:
                 bbl_per_mt=bbl_per_mt,
                 gal_per_bbl=gal_per_bbl,
                 ticker_template=ticker_template,
+                curve_mode=curve_mode or "monthly",
                 tradingview_symbol=str(row.get("tradingview_symbol") or "").strip(),
                 aliases=aliases,
                 product_group=product_group,

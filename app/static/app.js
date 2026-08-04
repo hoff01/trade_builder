@@ -42,6 +42,7 @@ const FALLBACK_ROOT_CONFIG = Object.freeze({
         native_unit: 'cpg',
         yellow_key: 'Comdty',
         ticker_template: '{root}{month_code}{y} {yellow_key}',
+        curve_mode: 'monthly',
         bbl_per_mt: DEFAULT_BBL_PER_MT,
         gal_per_bbl: DEFAULT_GAL_PER_BBL,
         aliases: ['ME', 'GC JET'],
@@ -53,6 +54,7 @@ const FALLBACK_ROOT_CONFIG = Object.freeze({
         native_unit: 'cpg',
         yellow_key: 'Comdty',
         ticker_template: '{root}{month_code}{y} {yellow_key}',
+        curve_mode: 'monthly',
         bbl_per_mt: DEFAULT_BBL_PER_MT,
         gal_per_bbl: DEFAULT_GAL_PER_BBL,
         tradingview_symbol: 'NYMEX:HO',
@@ -276,6 +278,7 @@ let pendingPlotlyResize = null;
 const SETTINGS_VERSION = 1;
 let settingsSaveTimer = null;
 const SHOULD_PERSIST_SETTINGS = window.location.protocol === 'file:';
+const OWNER_UPDATE_API_ENABLED = window.DASHBOARD_OWNER_UPDATE_API !== false;
 const UPDATE_API_STATUS_PATH = '/api/update/status';
 const UPDATE_API_PATH = '/api/update';
 
@@ -509,6 +512,7 @@ function renderLegGrid() {
     rows.forEach((row) => {
         const rowEl = document.createElement('div');
         rowEl.className = `leg-row ${row.rowClass || ''}`.trim();
+        rowEl.dataset.rowType = row.type;
 
         for (let i = 1; i <= LEG_COUNT; i++) {
             const cell = document.createElement('div');
@@ -538,6 +542,7 @@ function renderLegGrid() {
                 const select = document.createElement('select');
                 select.className = `leg-select ${row.className}`;
                 select.dataset.leg = i.toString();
+                select.setAttribute('aria-label', `${row.label} ${i}`);
                 cell.appendChild(select);
             } else {
                 const input = document.createElement('input');
@@ -545,6 +550,7 @@ function renderLegGrid() {
                 input.step = '0.1';
                 input.className = `leg-input ${row.className}`;
                 input.dataset.leg = i.toString();
+                input.setAttribute('aria-label', `${row.label} ${i}`);
                 cell.appendChild(input);
             }
 
@@ -589,6 +595,9 @@ function populateLegOptions() {
         select.value = legState.legs[legIndex].code;
         select.addEventListener('change', (event) => {
             legState.legs[legIndex].code = event.target.value;
+            if (isFlatCurveRoot(event.target.value)) {
+                legState.legs[legIndex].month = '';
+            }
             updateMonthOptionsForLeg(legIndex);
             if (legIndex === 0) {
                 syncCommodityFromLeg();
@@ -602,9 +611,12 @@ function populateLegOptions() {
 
     document.querySelectorAll('.leg-month').forEach((select) => {
         const legIndex = Number(select.dataset.leg) - 1;
+        const flatCurve = isFlatCurveRoot(legState.legs[legIndex].code);
+        if (flatCurve) legState.legs[legIndex].month = '';
         const options = getMonthOptionsForRoot(legState.legs[legIndex].code);
         const normalized = normalizeMonthOptionValue(legState.legs[legIndex].month);
         populateMonthSelect(select, options, normalized);
+        select.disabled = flatCurve;
         select.addEventListener('change', (event) => {
             legState.legs[legIndex].month = event.target.value;
             if (legIndex === 0) {
@@ -755,17 +767,20 @@ function bindSidebarToggles() {
 }
 
 function bindFieldControls() {
+    const availableOptions = getAvailableFieldOptions();
+    const availableKeys = new Set(availableOptions.map((option) => option.key));
+    if (!availableKeys.has(state.field)) {
+        state.field = getDefaultFieldOptionKey(availableOptions);
+    }
     const select = document.getElementById('field-select');
     if (select) {
-        if (!select.options.length) {
-            select.innerHTML = '';
-            FIELD_OPTIONS.forEach((option) => {
-                const item = document.createElement('option');
-                item.value = option.key;
-                item.textContent = option.label;
-                select.appendChild(item);
-            });
-        }
+        select.innerHTML = '';
+        availableOptions.forEach((option) => {
+            const item = document.createElement('option');
+            item.value = option.key;
+            item.textContent = option.label;
+            select.appendChild(item);
+        });
         select.addEventListener('change', () => {
             const key = select.value;
             if (key && key !== state.field) {
@@ -776,12 +791,36 @@ function bindFieldControls() {
     document.querySelectorAll('[data-field]').forEach((button) => {
         const key = button.dataset.field;
         if (!key) return;
+        const isAvailable = availableKeys.has(key);
+        button.hidden = !isAvailable;
+        button.setAttribute('aria-hidden', isAvailable ? 'false' : 'true');
+        if (!isAvailable) return;
         button.addEventListener('click', () => {
             if (key === state.field) return;
             setField(key);
         });
     });
     syncFieldUI();
+}
+
+function getAvailableFieldOptions() {
+    const available = window.EMBEDDED_DATA?.meta?.fields?.available;
+    if (!Array.isArray(available) || !available.length) {
+        return FIELD_OPTIONS.slice();
+    }
+    const availableBloombergKeys = new Set(
+        available.map((field) => String(field || '').trim().toUpperCase()).filter(Boolean)
+    );
+    const options = FIELD_OPTIONS.filter((option) => (
+        availableBloombergKeys.has(FIELD_KEY_MAP[option.key])
+    ));
+    return options.length ? options : FIELD_OPTIONS.slice(0, 1);
+}
+
+function getDefaultFieldOptionKey(options = getAvailableFieldOptions()) {
+    const defaultBloombergKey = getDefaultFieldKey();
+    const matching = options.find((option) => FIELD_KEY_MAP[option.key] === defaultBloombergKey);
+    return (matching || options[0] || FIELD_OPTIONS[0]).key;
 }
 
 function scheduleChartUpdate() {
@@ -840,7 +879,7 @@ function reloadDashboardAfterUpdate() {
 
 async function probeDataUpdateApi() {
     const button = document.getElementById('data-update');
-    if (!button || !isHttpDashboard()) return false;
+    if (!OWNER_UPDATE_API_ENABLED || !button || !isHttpDashboard()) return false;
 
     try {
         const response = await fetch(UPDATE_API_STATUS_PATH, {
@@ -870,7 +909,7 @@ async function probeDataUpdateApi() {
 
 function bindDataUpdate() {
     const button = document.getElementById('data-update');
-    if (!button || !isHttpDashboard()) return;
+    if (!OWNER_UPDATE_API_ENABLED || !button || !isHttpDashboard()) return;
 
     button.addEventListener('click', async () => {
         setDataUpdateState('loading', 'Updating Bloomberg data and rebuilding the export…');
@@ -1378,7 +1417,9 @@ function applyPrebuiltSpread() {
             if (!def) return;
             leg.code = resolvePrebuiltCode(def.code);
             leg.ratio = def.ratio;
-            leg.month = def.monthOffset ? getOffsetMonth(month, def.monthOffset) : month;
+            leg.month = isFlatCurveRoot(leg.code)
+                ? ''
+                : (def.monthOffset ? getOffsetMonth(month, def.monthOffset) : month);
         });
     }
 
@@ -1440,6 +1481,7 @@ function buildConfigBlock(remoteUrl, pollMs) {
         '<script>\n' +
         `  window.DASHBOARD_DATA_URL = ${urlValue};\n` +
         `  window.DASHBOARD_DATA_POLL_MS = ${pollMs};\n` +
+        '  window.DASHBOARD_OWNER_UPDATE_API = false;\n' +
         '</' + 'script>'
     );
 }
@@ -1560,6 +1602,15 @@ function updateLegBadges() {
 function updateLegFieldStates() {
     const config = LEG_MODE_CONFIG[legState.mode] || LEG_MODE_CONFIG.single;
     const showReset = state.spreadMode === 'multileg' && legState.mode === 'multileg';
+    const activeLegs = legState.legs.slice(0, config.legs);
+    const allActiveLegsAreFlat = activeLegs.length > 0 && activeLegs.every((leg) => (
+        Boolean(leg && leg.code) && isFlatCurveRoot(leg.code)
+    ));
+
+    document.querySelectorAll('.leg-row[data-row-type="month"]').forEach((row) => {
+        row.classList.toggle('is-hidden', allActiveLegsAreFlat);
+        row.setAttribute('aria-hidden', allActiveLegsAreFlat ? 'true' : 'false');
+    });
 
     document.querySelectorAll('.leg-reset').forEach((btn) => {
         const legIndex = Number(btn.dataset.leg);
@@ -1578,9 +1629,25 @@ function updateLegFieldStates() {
             el.classList.remove('is-active', 'is-missing');
         });
 
-        if (legIndex > config.legs) continue;
+        const activeLeg = legIndex <= config.legs;
         const leg = legState.legs[i] || {};
         const codeVal = leg.code;
+        const flatCurve = activeLeg && Boolean(codeVal) && isFlatCurveRoot(codeVal);
+        const monthCell = monthEl ? monthEl.closest('.leg-cell') : null;
+        if (monthCell) {
+            monthCell.classList.toggle('is-hidden', !activeLeg);
+            monthCell.classList.toggle('is-monthless-placeholder', flatCurve);
+            monthCell.setAttribute('aria-hidden', flatCurve || !activeLeg ? 'true' : 'false');
+        }
+        if (monthEl) {
+            monthEl.disabled = flatCurve;
+            monthEl.setAttribute('aria-hidden', flatCurve ? 'true' : 'false');
+        }
+        if (!activeLeg) continue;
+        if (flatCurve && leg.month) {
+            leg.month = '';
+            if (monthEl) monthEl.value = '';
+        }
         const monthVal = leg.month;
         const ratioVal = Number(leg.ratio);
         const ratioHas = Number.isFinite(ratioVal) && ratioVal !== 0;
@@ -1590,7 +1657,7 @@ function updateLegFieldStates() {
         if (codeEl) {
             codeEl.classList.add(codeVal ? 'is-active' : 'is-missing');
         }
-        if (monthEl) {
+        if (monthEl && !flatCurve) {
             monthEl.classList.add(monthVal ? 'is-active' : 'is-missing');
         }
         if (ratioEl && config.showRatioRow) {
@@ -1629,7 +1696,9 @@ function restoreLegDraft(draft) {
         const saved = draft.legs[index] || {};
         const target = legState.legs[index] || (legState.legs[index] = { code: '', month: '', ratio: 0 });
         target.code = typeof saved.code === 'string' ? saved.code : '';
-        target.month = typeof saved.month === 'string' ? saved.month : '';
+        target.month = isFlatCurveRoot(target.code)
+            ? ''
+            : (typeof saved.month === 'string' ? saved.month : '');
         target.ratio = Number.isFinite(Number(saved.ratio)) ? Number(saved.ratio) : 0;
     }
     if (['single', 'spread', 'fly', 'box'].includes(mode)) {
@@ -1834,12 +1903,32 @@ function getContractYearForMonthLabel(baseYear, monthLabel) {
 }
 
 function buildContractCode(rootCode, monthLabel, baseYear) {
-    if (!rootCode || !monthLabel || !baseYear) return '';
+    if (!rootCode || !baseYear) return '';
+    const rootConfig = getRootConfig(rootCode) || {};
+    const configuredRoot = rootConfig.root || canonicalizeRootCode(rootCode);
+    if (isFlatCurveRoot(configuredRoot)) {
+        const fullYear = Number(baseYear);
+        const yy = Number.isFinite(fullYear) ? String(fullYear).slice(-2).padStart(2, '0') : '';
+        const y = yy ? yy.slice(-1) : '';
+        return TRADE_MATH.applyTickerTemplate(
+            rootConfig.ticker_template || '{root} {yellow_key}',
+            {
+                root: configuredRoot,
+                yellow_key: rootConfig.yellow_key || '',
+                year: Number.isFinite(fullYear) ? String(fullYear) : '',
+                yyyy: Number.isFinite(fullYear) ? String(fullYear) : '',
+                yy,
+                year_2d: yy,
+                y,
+                year_1d: y,
+                month_code: ''
+            }
+        );
+    }
+    if (!monthLabel) return '';
     const monthCode = getContractMonthCode(monthLabel);
     if (!monthCode) return '';
     const contractYear = getContractYearForMonthLabel(baseYear, monthLabel);
-    const rootConfig = getRootConfig(rootCode) || {};
-    const configuredRoot = rootConfig.root || canonicalizeRootCode(rootCode);
     return TRADE_MATH.buildTicker(configuredRoot, monthCode, contractYear, rootConfig);
 }
 
@@ -1866,7 +1955,7 @@ function getHoverContractLabel(year) {
     const legs = getLegsForDisplay();
     if (!legs.length) return '';
     const leg = legs[0];
-    if (!leg || !leg.month) return '';
+    if (!leg || (!leg.month && !isFlatCurveLeg(leg))) return '';
     const resolved = resolveCommodityForLeg(leg);
     const root = (resolved && (resolved.root_code || resolved.code)) || leg.code || state.commodity;
     return buildContractCode(root, leg.month, getDisplayYear(year));
@@ -1960,10 +2049,13 @@ function getRootCodeOptions() {
     const unique = new Map();
     getRootConfigEntries().forEach((config) => {
         const unit = TRADE_MATH.normalizeUnit(config.native_unit);
-        const detail = unit ? ` · ${unit}` : '';
+        const unitDetail = unit ? ` · ${unit}` : '';
+        const curveDetail = TRADE_MATH.normalizeCurveMode(config.curve_mode) === 'flat'
+            ? ' · flat daily'
+            : '';
         unique.set(config.root, {
             value: config.root,
-            label: `${config.name || config.root} — ${config.root}${detail}`,
+            label: `${config.name || config.root} — ${config.root}${unitDetail}${curveDetail}`,
             sortOrder: Number.isFinite(Number(config.sort_order)) ? Number(config.sort_order) : Number.MAX_SAFE_INTEGER
         });
     });
@@ -1974,10 +2066,13 @@ function getRootCodeOptions() {
         if (root && !unique.has(root)) {
             const config = getRootConfig(root);
             const unit = config && TRADE_MATH.normalizeUnit(config.native_unit);
-            const detail = unit ? ` · ${unit}` : '';
+            const unitDetail = unit ? ` · ${unit}` : '';
+            const curveDetail = config && TRADE_MATH.normalizeCurveMode(config.curve_mode) === 'flat'
+                ? ' · flat daily'
+                : '';
             unique.set(root, {
                 value: root,
-                label: `${label} — ${root}${detail}`,
+                label: `${label} — ${root}${unitDetail}${curveDetail}`,
                 sortOrder: config && Number.isFinite(Number(config.sort_order))
                     ? Number(config.sort_order)
                     : Number.MAX_SAFE_INTEGER
@@ -2014,6 +2109,7 @@ function formatPeriodOffset(label, offset) {
 
 function getMonthOptionsForRoot(rootCode) {
     const commodities = getCommodityList();
+    if (rootCode && isFlatCurveRoot(rootCode)) return [];
     if (!rootCode || !commodities.length) return EXTENDED_MONTH_OPTIONS.slice();
     const canonicalRoot = canonicalizeRootCode(rootCode);
     const matches = commodities.filter((com) => (
@@ -2099,11 +2195,15 @@ function populateMonthSelect(select, options, currentValue) {
 function updateMonthOptionsForLeg(legIndex) {
     const select = document.querySelector(`.leg-month[data-leg="${legIndex + 1}"]`);
     if (!select) return;
-    const options = getMonthOptionsForRoot(legState.legs[legIndex].code);
-    const normalized = normalizeMonthOptionValue(legState.legs[legIndex].month);
+    const leg = legState.legs[legIndex];
+    const flatCurve = isFlatCurveRoot(leg.code);
+    const options = getMonthOptionsForRoot(leg.code);
+    if (flatCurve) leg.month = '';
+    const normalized = normalizeMonthOptionValue(leg.month);
     populateMonthSelect(select, options, normalized);
+    select.disabled = flatCurve;
     if (normalized && !options.includes(normalized)) {
-        legState.legs[legIndex].month = '';
+        leg.month = '';
     }
 }
 
@@ -2149,10 +2249,11 @@ function resolveCommodityForLeg(leg) {
     if (!leg || !leg.code) return null;
     const commodities = getCommodityList();
     if (!commodities.length) return null;
-    const selection = parseMonthSelection(leg.month || '');
-    const desiredMonth = getSelectionMatchLabel(selection, leg.month);
-    const desiredOffset = selection ? selection.offset : 0;
     const root = canonicalizeRootCode(leg.code);
+    const flatCurve = isFlatCurveRoot(root);
+    const selection = flatCurve ? null : parseMonthSelection(leg.month || '');
+    const desiredMonth = flatCurve ? '' : getSelectionMatchLabel(selection, leg.month);
+    const desiredOffset = flatCurve ? 0 : (selection ? selection.offset : 0);
 
     let matches = commodities
         .filter((com) => canonicalizeRootCode(com.security || com.root_code || com.code) === root)
@@ -2239,7 +2340,9 @@ function selectCom(code) {
     const selected = commodities.find((com) => com.code === code || com.root_code === code || com.security === code);
     if (selected) {
         legState.legs[0].code = selected.security || selected.root_code || selected.code;
-        if (selected.contract_month) {
+        if (isFlatCurveRoot(legState.legs[0].code)) {
+            legState.legs[0].month = '';
+        } else if (selected.contract_month) {
             legState.legs[0].month = selected.contract_month;
         }
     } else {
@@ -2253,6 +2356,8 @@ function selectCom(code) {
     if (monthSelect) {
         monthSelect.value = legState.legs[0].month;
     }
+    updateMonthOptionsForLeg(0);
+    updateLegFieldStates();
     syncCommodityFromLeg();
     updateLegSummary();
     updateChart();
@@ -2267,8 +2372,11 @@ function setUnit(unit, el) {
 }
 
 function setField(fieldKey) {
-    const allowed = new Set(FIELD_OPTIONS.map((option) => option.key));
-    const nextField = allowed.has(fieldKey) ? fieldKey : 'last';
+    const availableOptions = getAvailableFieldOptions();
+    const allowed = new Set(availableOptions.map((option) => option.key));
+    const nextField = allowed.has(fieldKey)
+        ? fieldKey
+        : getDefaultFieldOptionKey(availableOptions);
     if (nextField === state.field) return;
     state.field = nextField;
     syncFieldUI();
@@ -2284,8 +2392,10 @@ function syncUnitUI() {
 }
 
 function syncFieldUI() {
+    const available = new Set(getAvailableFieldOptions().map((option) => option.key));
     document.querySelectorAll('[data-field]').forEach((button) => {
         const key = button.dataset.field;
+        button.hidden = !available.has(key);
         button.classList.toggle('active', key === state.field);
     });
     const select = document.getElementById('field-select');
@@ -2313,6 +2423,7 @@ function normalizeRootConfigEntry(value, fallbackRoot) {
         native_unit: nativeUnit || String(nativeUnitRaw || '').trim(),
         yellow_key: entry.yellow_key || entry.yellowKey || '',
         ticker_template: entry.ticker_template || entry.tickerTemplate || '{root}{month_code}{y} {yellow_key}',
+        curve_mode: TRADE_MATH.normalizeCurveMode(entry.curve_mode || entry.curveMode),
         tradingview_symbol: entry.tradingview_symbol || entry.tradingviewSymbol || '',
         bbl_per_mt: entry.bbl_per_mt != null ? entry.bbl_per_mt : entry.bblPerMT,
         gal_per_bbl: entry.gal_per_bbl != null ? entry.gal_per_bbl : entry.galPerBbl,
@@ -2373,6 +2484,15 @@ function getRootConfig(rootCode) {
     return getRootConfigEntries().find((entry) => (
         entry.root === normalized || (Array.isArray(entry.aliases) && entry.aliases.includes(normalized))
     )) || null;
+}
+
+function isFlatCurveRoot(rootCode) {
+    const config = getRootConfig(rootCode);
+    return Boolean(config && TRADE_MATH.normalizeCurveMode(config.curve_mode) === 'flat');
+}
+
+function isFlatCurveLeg(leg, resolved) {
+    return isFlatCurveRoot(getRootCodeFromLeg(leg, resolved));
 }
 
 function canonicalizeRootCode(rootCode) {
@@ -2661,7 +2781,9 @@ function normalizeMonthOptionValue(label) {
 }
 
 function getYearFilterOffset() {
-    const leg = legState && Array.isArray(legState.legs) ? legState.legs[0] : null;
+    const leg = legState && Array.isArray(legState.legs)
+        ? legState.legs.find((item) => item && item.month)
+        : null;
     if (!leg || !leg.month) return 0;
     const selection = parseMonthSelection(leg.month);
     if (!selection) return 0;
@@ -3234,6 +3356,7 @@ function getEmbeddedSeries() {
 }
 
 function shouldAdjustMonthForLeg(leg, resolved) {
+    if (isFlatCurveLeg(leg, resolved)) return false;
     if (!leg || !leg.month) return false;
     const selection = parseMonthSelection(leg.month);
     const desiredMonth = getSelectionMatchLabel(selection, leg.month);
@@ -3347,6 +3470,29 @@ async function getLegSeriesFromApi(leg) {
     return { leg, resolved, series };
 }
 
+function alignFlatCurveLegSeries(legSeries, legs) {
+    const nonFlatItems = legSeries.filter((item) => !isFlatCurveLeg(item.leg, item.resolved));
+    if (!nonFlatItems.length) return legSeries;
+    const anchor = getContractAnchorConfigFromLegs(legs);
+    if (!anchor || !Number.isFinite(anchor.rollMonthIndex)) return legSeries;
+    const targetYears = Array.from(new Set(
+        nonFlatItems.flatMap((item) => Object.keys(item.series).map(Number).filter(Number.isFinite))
+    )).sort((a, b) => a - b);
+    if (!targetYears.length) return legSeries;
+
+    return legSeries.map((item) => {
+        if (!isFlatCurveLeg(item.leg, item.resolved)) return item;
+        return {
+            ...item,
+            series: TRADE_MATH.alignFlatCurveSeries(
+                item.series,
+                targetYears,
+                anchor.rollMonthIndex
+            )
+        };
+    });
+}
+
 async function getVolumeSeriesFromApi(leg) {
     const resolved = resolveCommodityForLeg(leg);
     if (!resolved) return null;
@@ -3422,13 +3568,17 @@ function hasLegMonth(leg) {
     return Boolean(leg && typeof leg.month === 'string' && leg.month.trim());
 }
 
+function hasRequiredLegMonth(leg) {
+    return isFlatCurveLeg(leg) || hasLegMonth(leg);
+}
+
 function getLegsForCalculation() {
     const legs = getLegsWithEffectiveRatios().filter((leg) => {
         const ratio = Number(leg.ratio);
         return leg.code && Number.isFinite(ratio) && ratio !== 0;
     });
     if (!legs.length) return [];
-    if (legs.some((leg) => !hasLegMonth(leg))) {
+    if (legs.some((leg) => !hasRequiredLegMonth(leg))) {
         return [];
     }
     return legs;
@@ -3513,7 +3663,7 @@ function combineVolumeSeries(legSeries) {
 function getLegsForVolume() {
     const legs = getActiveLegs().filter((leg) => leg.code);
     if (!legs.length) return [];
-    if (legs.some((leg) => !hasLegMonth(leg))) {
+    if (legs.some((leg) => !hasRequiredLegMonth(leg))) {
         return [];
     }
     return legs;
@@ -3525,8 +3675,9 @@ async function getCombinedSeriesData(legsOverride) {
 
     const embedded = window.EMBEDDED_DATA;
     if (embedded && embedded.commodities && embedded.meta) {
-        const legSeries = legs.map((leg) => getLegSeriesFromEmbedded(leg)).filter(Boolean);
+        let legSeries = legs.map((leg) => getLegSeriesFromEmbedded(leg)).filter(Boolean);
         if (legSeries.length !== legs.length) return null;
+        legSeries = alignFlatCurveLegSeries(legSeries, legs);
         const combined = combineLegSeries(legSeries);
         if (combined) {
             if (legs.length === 1 && legSeries[0].vol30Series) {
@@ -3539,7 +3690,7 @@ async function getCombinedSeriesData(legsOverride) {
     }
 
     const legSeries = await Promise.all(legs.map((leg) => getLegSeriesFromApi(leg)));
-    const filtered = legSeries.filter(Boolean);
+    const filtered = alignFlatCurveLegSeries(legSeries.filter(Boolean), legs);
     if (filtered.length !== legs.length) return null;
     return combineLegSeries(filtered);
 }
@@ -4372,7 +4523,7 @@ async function updateChart() {
                 const ratio = Number(leg.ratio);
                 return leg.code && Number.isFinite(ratio) && ratio !== 0;
             });
-            const missingMonth = activeLegs.length && activeLegs.some((leg) => !hasLegMonth(leg));
+            const missingMonth = activeLegs.length && activeLegs.some((leg) => !hasRequiredLegMonth(leg));
             resetPlot(missingMonth ? 'Select a month to begin' : undefined);
             renderVarSeasonalityChart(null);
             return;

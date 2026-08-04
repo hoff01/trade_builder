@@ -414,6 +414,20 @@ def main() -> int:
                 "enabled workbook roots have no rows in this data file: " + ", ".join(missing_data)
             )
 
+        curve_columns = {
+            "frequency": resolved["frequency"],
+            "reference": resolved["reference"],
+            "month": resolved["month"],
+            "contract_month_yr": resolved["contract_month_yr"],
+            "contract_year": resolved["contract_year"],
+        }
+        missing_curve_columns = [name for name, column in curve_columns.items() if not column]
+        if missing_curve_columns:
+            issues.append(
+                "configured curve-mode checks require columns: "
+                + ", ".join(missing_curve_columns)
+            )
+
         if root_col:
             for root in sorted(data_roots & configured_roots):
                 configured = root_config.by_root[root]
@@ -454,6 +468,93 @@ def main() -> int:
                         f"{root_mismatches} rows use security_prefix {root} but their ticker "
                         f"does not start with {root}."
                     )
+
+                if not missing_curve_columns:
+                    frequency_col = curve_columns["frequency"]
+                    frequency = (
+                        pl.col(frequency_col)
+                        .cast(pl.Utf8, strict=False)
+                        .str.strip_chars()
+                        .str.to_lowercase()
+                    )
+                    month_col = curve_columns["month"]
+                    contract_col = curve_columns["contract_month_yr"]
+                    contract_year_col = curve_columns["contract_year"]
+                    curve_reference_col = curve_columns["reference"]
+                    if configured.curve_mode == "flat":
+                        ticker_count = root_df[security_col].drop_nulls().n_unique()
+                        if ticker_count != 1 or root_df[security_col].null_count():
+                            issues.append(
+                                f"{root} flat curve must contain exactly one non-null security; "
+                                f"found {ticker_count}."
+                            )
+                        bad_frequency = root_df.filter(
+                            pl.col(frequency_col).is_null() | (frequency != "flat")
+                        ).height
+                        if bad_frequency:
+                            issues.append(
+                                f"{bad_frequency} rows for flat root {root} do not use frequency Flat."
+                            )
+                        bad_month = root_df.filter(
+                            pl.col(month_col).is_not_null()
+                            & (pl.col(month_col).cast(pl.Utf8, strict=False).str.strip_chars() != "")
+                        ).height
+                        if bad_month:
+                            issues.append(f"{bad_month} rows for flat root {root} have a month.")
+                        bad_contract = root_df.filter(
+                            pl.col(contract_col).is_not_null()
+                            & (pl.col(contract_col).cast(pl.Utf8, strict=False).str.strip_chars() != "")
+                        ).height
+                        if bad_contract:
+                            issues.append(
+                                f"{bad_contract} rows for flat root {root} have contract_month_yr."
+                            )
+                        bad_contract_year = root_df.filter(
+                            pl.col(contract_year_col).is_not_null()
+                        ).height
+                        if bad_contract_year:
+                            issues.append(
+                                f"{bad_contract_year} rows for flat root {root} have contract_year."
+                            )
+                        bad_reference = root_df.filter(
+                            pl.col(curve_reference_col).cast(pl.Int64, strict=False).is_null()
+                            | (pl.col(curve_reference_col).cast(pl.Int64, strict=False) != 1)
+                        ).height
+                        if bad_reference:
+                            issues.append(
+                                f"{bad_reference} rows for flat root {root} do not use reference 1."
+                            )
+                    else:
+                        bad_frequency = root_df.filter(
+                            pl.col(frequency_col).is_null() | (frequency != "monthly")
+                        ).height
+                        if bad_frequency:
+                            issues.append(
+                                f"{bad_frequency} rows for dated root {root} do not use frequency Monthly."
+                            )
+                        bad_month = root_df.filter(
+                            pl.col(month_col).is_null()
+                            | (pl.col(month_col).cast(pl.Utf8, strict=False).str.strip_chars() == "")
+                        ).height
+                        if bad_month:
+                            issues.append(
+                                f"{bad_month} rows for dated root {root} are missing month metadata."
+                            )
+                        bad_contract = root_df.filter(
+                            pl.col(contract_col).is_null()
+                            | (pl.col(contract_col).cast(pl.Utf8, strict=False).str.strip_chars() == "")
+                        ).height
+                        if bad_contract:
+                            issues.append(
+                                f"{bad_contract} rows for dated root {root} are missing contract_month_yr metadata."
+                            )
+                        bad_contract_year = root_df.filter(
+                            pl.col(contract_year_col).cast(pl.Int64, strict=False).is_null()
+                        ).height
+                        if bad_contract_year:
+                            issues.append(
+                                f"{bad_contract_year} rows for dated root {root} are missing contract_year metadata."
+                            )
 
     if warnings:
         print("\nWarnings:")

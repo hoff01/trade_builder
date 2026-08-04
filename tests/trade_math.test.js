@@ -63,3 +63,25 @@ test('honors a custom ticker template', () => {
     });
     assert.equal(ticker, 'WU-Z-2027 Index');
 });
+
+test('normalizes RVO as a flat monthless curve', () => {
+    assert.equal(TradeMath.normalizeCurveMode('Flat'), 'flat');
+    assert.equal(TradeMath.normalizeCurveMode('flat forward'), 'flat');
+    assert.equal(TradeMath.normalizeCurveMode('Monthly'), 'monthly');
+    assert.equal(TradeMath.normalizeCurveMode(''), 'monthly');
+});
+
+test('aligns each daily flat value to the selected forward-curve cycle', () => {
+    const aligned = TradeMath.alignFlatCurveSeries({
+        2025: { x: [1, 31, 32, 366], y: [10, 11, 12, 13] },
+        2026: { x: [1, 31, 32], y: [20, 21, 22] }
+    }, [2026], 2);
+
+    assert.deepEqual(aligned, {
+        2026: { x: [32, 366, 367, 397], y: [12, 13, 20, 21] }
+    });
+    assert.deepEqual(
+        TradeMath.alignFlatCurveSeries({ 2025: { x: [1, 366], y: [10, 13] } }, [2026], 1),
+        { 2026: { x: [1, 366], y: [10, 13] } }
+    );
+});

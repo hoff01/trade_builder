@@ -26,12 +26,13 @@ from app.root_config import (
 )
 
 DEFAULT_ROWS = (
-    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:WU", "ME|GC JET", "Refined Products", 10),
-    (True, "HO", "Heating Oil", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:HO", "ULSD|HEATING OIL", "Refined Products", 20),
-    (True, "RB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:RB", "RBOB", "Refined Products", 30),
-    (True, "QS", "ICE Low Sulphur Gasoil", "Comdty", "$/MT", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "ICEEUR:QS1!", "GASOIL|LSGO", "Refined Products", 40),
-    (True, "CL", "WTI Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:CL", "WTI", "Crude", 50),
-    (True, "CO", "Brent Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "TVC:UKOIL", "BRENT", "Crude", 60),
+    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:WU", "ME|GC JET", "Refined Products", 10),
+    (True, "HO", "Heating Oil", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:HO", "ULSD|HEATING OIL", "Refined Products", 20),
+    (True, "RB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:RB", "RBOB", "Refined Products", 30),
+    (True, "RVO", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 35),
+    (True, "QS", "ICE Low Sulphur Gasoil", "Comdty", "$/MT", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "ICEEUR:QS1!", "GASOIL|LSGO", "Refined Products", 40),
+    (True, "CL", "WTI Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:CL", "WTI", "Crude", 50),
+    (True, "CO", "Brent Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "TVC:UKOIL", "BRENT", "Crude", 60),
 )
 
 
@@ -42,11 +43,12 @@ def build_workbook(path: Path) -> None:
     instructions.title = "Instructions"
     instructions.append(["Pricing Dashboard — Security Root Setup"])
     instructions.append(["1", "Add one row per Bloomberg root and set common_name to the label shown everywhere in the dashboard."])
-    instructions.append(["2", "Choose Comdty or Index and the native quote unit from the dropdowns."])
+    instructions.append(["2", "Choose Comdty or Index, the native quote unit, and Monthly or Flat curve mode from the dropdowns."])
     instructions.append(["3", "Keep bbl_per_mt and gal_per_bbl explicit so every output-unit conversion is deterministic."])
-    instructions.append(["4", "Review the Bloomberg Update sheet to control dates, fields, and connection settings."])
+    instructions.append(["4", "Review the Bloomberg Update sheet to control dates, full data fields, lightweight dashboard fields, and connection settings."])
     instructions.append(["5", "Save the workbook, start the local dashboard, and press UPDATE DATA."])
     instructions.append(["Ticker example", "HO + Feb (G) + {y} + Comdty produces HOG6 Comdty for 2026."])
+    instructions.append(["Flat example", "RVO uses Flat with {root} {yellow_key}; Bloomberg pulls RVO Index once and the dashboard applies each daily value across the full curve."])
     instructions.append(["Year placeholders", "Use {y} for 6, {yy} for 26, or {year} for 2026. yellow_key independently controls Comdty vs Index."])
     instructions.append([])
     instructions.append(["Conversion checks"])
@@ -64,7 +66,7 @@ def build_workbook(path: Path) -> None:
     for row in DEFAULT_ROWS:
         sheet.append(row)
     sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = f"A1:L{sheet.max_row}"
+    sheet.auto_filter.ref = f"A1:M{sheet.max_row}"
     sheet.sheet_view.showGridLines = False
 
     header_fill = PatternFill("solid", fgColor="1E3A8A")
@@ -80,12 +82,12 @@ def build_workbook(path: Path) -> None:
 
     widths = {
         "A": 11, "B": 10, "C": 28, "D": 13, "E": 14, "F": 13,
-        "G": 13, "H": 43, "I": 24, "J": 30, "K": 22, "L": 12,
+        "G": 13, "H": 43, "I": 14, "J": 24, "K": 30, "L": 22, "M": 12,
     }
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
 
-    table = Table(displayName="SecurityRoots", ref=f"A1:L{sheet.max_row}")
+    table = Table(displayName="SecurityRoots", ref=f"A1:M{sheet.max_row}")
     table.tableStyleInfo = TableStyleInfo(
         name="TableStyleMedium2",
         showFirstColumn=False,
@@ -99,6 +101,7 @@ def build_workbook(path: Path) -> None:
         ("A2:A501", '"TRUE,FALSE"', "Choose TRUE or FALSE"),
         ("D2:D501", '"Comdty,Index"', "Choose Comdty or Index"),
         ("E2:E501", '"cpg,$/gal,$/bbl,$/MT"', "Choose the Bloomberg native quote unit"),
+        ("I2:I501", '"Monthly,Flat"', "Monthly uses dated contracts; Flat uses one daily series with no month selector"),
     )
     for cell_range, formula, prompt in validations:
         validation = DataValidation(type="list", formula1=formula, allow_blank=False)
@@ -120,7 +123,8 @@ def build_workbook(path: Path) -> None:
         ("contract_history_months", update_defaults.contract_history_months, "Months of history requested before each delivery month."),
         ("reference_depth", update_defaults.reference_depth, "Maximum dated-contract reference retained, normally 1 or 2."),
         ("overlap_days", update_defaults.overlap_days, "Days re-pulled for active contracts during an incremental update."),
-        ("fields", ",".join(update_defaults.fields), "Bloomberg historical fields; PX_LAST is required."),
+        ("fields", ",".join(update_defaults.fields), "Bloomberg fields retained in the full CSV and Parquet; PX_LAST is required."),
+        ("dashboard_fields", ",".join(update_defaults.dashboard_fields), "Subset embedded in the portable dashboard; every value must also appear in fields."),
         ("host", update_defaults.host, "Bloomberg Desktop API host."),
         ("port", update_defaults.port, "Bloomberg Desktop API port."),
         ("service", update_defaults.service, "Bloomberg reference-data service."),

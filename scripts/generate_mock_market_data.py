@@ -178,6 +178,23 @@ def _build_spot_curves(all_dates: list[date], rng: np.random.Generator) -> dict[
     return {"CL": cl, "CO": co, "HO": ho, "RB": rb, "QS": qs, "WU": wu}
 
 
+def _build_flat_rvo_curve(all_dates: list[date], seed: int) -> np.ndarray:
+    """Create one deterministic daily cpg series used for every forward month."""
+
+    rng = np.random.default_rng(seed + 17)
+    values = np.empty(len(all_dates), dtype=float)
+    values[0] = 18.0
+    for idx in range(1, len(all_dates)):
+        current = all_dates[idx]
+        seasonal = 1.8 * _season_value(current.month, -0.4)
+        target = 17.5 + seasonal
+        values[idx] = max(
+            1.0,
+            values[idx - 1] + 0.08 * (target - values[idx - 1]) + rng.normal(0, 0.32),
+        )
+    return values
+
+
 def _from_usd_per_bbl(value: float, spec: MarketSpec) -> float:
     """Convert the generated economic curve into each Bloomberg root's native quote unit."""
     if spec.native_unit == "$/bbl":
@@ -202,6 +219,7 @@ def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int
     rng = np.random.default_rng(seed)
 
     spot_curves = _build_spot_curves(all_dates, rng)
+    flat_rvo = _build_flat_rvo_curve(all_dates, seed)
     columns = {
         "date": [],
         "security_str": [],
@@ -275,6 +293,36 @@ def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int
                         columns["year"].append(current_date.year)
                         columns["bbl_per_mt"].append(spec.bbl_per_mt)
                         columns["gal_per_bbl"].append(42)
+
+    # RVO is an undated daily index, not a futures strip. Keep one observation
+    # per date in the source; browser JavaScript aligns that same daily value to
+    # whichever dated curve month is used by the other trade legs.
+    rvo_rng = np.random.default_rng(seed + 29)
+    for current_date in all_dates:
+        idx = date_to_idx[current_date]
+        settle = max(0.01, flat_rvo[idx] + rvo_rng.normal(0, 0.08))
+        close = max(0.01, settle + rvo_rng.normal(0, 0.05))
+        last = max(0.01, close + rvo_rng.normal(0, 0.04))
+        fair_1430 = max(0.01, settle + rvo_rng.normal(0, 0.04))
+        columns["date"].append(current_date)
+        columns["security_str"].append("RVO Index")
+        columns["FUT_CUR_GEN_TICKER"].append("RVO Index")
+        columns["security_prefix"].append("RVO")
+        columns["CLEAN_NAME"].append("RVO")
+        columns["exchange"].append("Bloomberg")
+        columns["frequency"].append("Flat")
+        columns["reference"].append(1)
+        columns["month"].append("")
+        columns["contract_month_yr"].append("")
+        columns["contract_year"].append(None)
+        columns["PX_LAST"].append(float(round(last, 5)))
+        columns["PX_CLOSE"].append(float(round(close, 5)))
+        columns["PX_SETTLE"].append(float(round(settle, 5)))
+        columns["PX_FAIR_1430"].append(float(round(fair_1430, 5)))
+        columns["PX_VOLUME"].append(None)
+        columns["year"].append(current_date.year)
+        columns["bbl_per_mt"].append(7.45)
+        columns["gal_per_bbl"].append(42)
 
     df = pl.DataFrame(columns)
     df = df.sort(["security_prefix", "security_str", "reference", "date"])

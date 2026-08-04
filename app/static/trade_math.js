@@ -19,6 +19,7 @@
         return acc;
     }, {}));
     const CONTRACT_MONTH_PATTERN = '[FGHJKMNQUVXZ]';
+    const MONTH_AXIS_BOUNDARIES = Object.freeze([1, 32, 61, 92, 122, 153, 183, 214, 245, 275, 306, 336, 367]);
 
     function asFinite(value) {
         if (value === '' || value == null) return null;
@@ -58,6 +59,52 @@
         if (value === '$/bbl' || value === 'usd/bbl' || value === '$/barrel' || value === 'usd/barrel') return '$/bbl';
         if (value === '$/mt' || value === 'usd/mt' || value === '$/metricton' || value === 'usd/metricton') return '$/MT';
         return '';
+    }
+
+    function normalizeCurveMode(value) {
+        const mode = String(value == null ? '' : value)
+            .trim()
+            .replace(/[\s_-]+/g, '')
+            .toLowerCase();
+        if (mode === 'flat' || mode === 'flatforward' || mode === 'monthless' || mode === 'spot') {
+            return 'flat';
+        }
+        return 'monthly';
+    }
+
+    function alignFlatCurveSeries(seriesMap, targetYears, rollMonthIndex) {
+        const source = seriesMap && typeof seriesMap === 'object' ? seriesMap : {};
+        const monthIndex = Math.trunc(Number(rollMonthIndex));
+        if (monthIndex < 1 || monthIndex > 12 || !Array.isArray(targetYears)) return {};
+        const boundary = MONTH_AXIS_BOUNDARIES[monthIndex - 1];
+        const aligned = {};
+
+        function appendWindow(output, series, predicate, offset) {
+            if (!series || !Array.isArray(series.x) || !Array.isArray(series.y)) return;
+            const length = Math.min(series.x.length, series.y.length);
+            for (let index = 0; index < length; index++) {
+                const x = Number(series.x[index]);
+                if (!Number.isFinite(x) || !predicate(x)) continue;
+                output.push({ x: x + offset, y: series.y[index] });
+            }
+        }
+
+        targetYears.forEach((targetYearValue) => {
+            const targetYear = Number(targetYearValue);
+            if (!Number.isFinite(targetYear)) return;
+            const points = [];
+            appendWindow(points, source[String(targetYear - 1)] || source[targetYear - 1], (x) => x >= boundary, 0);
+            if (monthIndex > 1) {
+                appendWindow(points, source[String(targetYear)] || source[targetYear], (x) => x < boundary, 366);
+            }
+            if (!points.length) return;
+            points.sort((a, b) => a.x - b.x);
+            aligned[String(targetYear)] = {
+                x: points.map((point) => point.x),
+                y: points.map((point) => point.y)
+            };
+        });
+        return aligned;
     }
 
     function normalizeConversionConfig(config) {
@@ -251,6 +298,8 @@
         round5,
         format,
         normalizeUnit,
+        normalizeCurveMode,
+        alignFlatCurveSeries,
         normalizeConversionConfig,
         convertValue,
         conversionFactor,

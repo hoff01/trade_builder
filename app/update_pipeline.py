@@ -81,10 +81,11 @@ class ContractSpec:
     native_unit: str
     bbl_per_mt: float
     gal_per_bbl: float
+    curve_mode: str
     month_number: int
     month_code: str
     month_label: str
-    contract_year: int
+    contract_year: int | None
     contract_month_yr: str
     start_date: date
     end_date: date
@@ -187,13 +188,39 @@ def _ticker_for(root: SecurityRoot, month_code: str, contract_year: int) -> str:
 
 
 def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tuple[ContractSpec, ...]:
-    """Expand enabled spreadsheet roots into dated Bloomberg contracts."""
+    """Expand roots into dated contracts or one monthless flat-curve security."""
 
     current_date = as_of or date.today()
     settings = config.update
     specs: list[ContractSpec] = []
     seen: set[str] = set()
     for root in sorted(config.enabled_roots, key=lambda item: (item.sort_order, item.root)):
+        if root.curve_mode == "flat":
+            ticker = _ticker_for(root, "", current_date.year)
+            normalized = ticker.casefold()
+            if normalized in seen:
+                raise UpdateError(f"Ticker template generated a duplicate security: {ticker}")
+            seen.add(normalized)
+            specs.append(
+                ContractSpec(
+                    ticker=ticker,
+                    root=root.root,
+                    display_name=root.common_name,
+                    yellow_key=root.yellow_key,
+                    native_unit=root.native_unit,
+                    bbl_per_mt=root.bbl_per_mt,
+                    gal_per_bbl=root.gal_per_bbl,
+                    curve_mode="flat",
+                    month_number=0,
+                    month_code="",
+                    month_label="",
+                    contract_year=None,
+                    contract_month_yr="",
+                    start_date=settings.history_start,
+                    end_date=current_date,
+                )
+            )
+            continue
         for contract_year in range(settings.contract_start_year, settings.contract_end_year + 1):
             for month_number, (month_code, month_label) in MONTH_CODES.items():
                 delivery_start = date(contract_year, month_number, 1)
@@ -216,6 +243,7 @@ def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tu
                         native_unit=root.native_unit,
                         bbl_per_mt=root.bbl_per_mt,
                         gal_per_bbl=root.gal_per_bbl,
+                        curve_mode="monthly",
                         month_number=month_number,
                         month_code=month_code,
                         month_label=month_label,
@@ -253,6 +281,8 @@ def _finite_float(value: object) -> float | None:
 
 
 def _reference_for(observation_date: date, spec: ContractSpec) -> int:
+    if spec.curve_mode == "flat":
+        return 1
     nearest_delivery_year = observation_date.year + (
         1 if observation_date.month >= spec.month_number else 0
     )
@@ -296,7 +326,7 @@ def normalize_bloomberg_rows(
             "FUT_CUR_GEN_TICKER": spec.ticker,
             "security_prefix": spec.root,
             "CLEAN_NAME": spec.display_name,
-            "frequency": "Monthly",
+            "frequency": "Flat" if spec.curve_mode == "flat" else "Monthly",
             "reference": reference,
             "month": spec.month_label,
             "contract_month_yr": spec.contract_month_yr,
@@ -333,14 +363,14 @@ def normalize_bloomberg_rows(
 
 
 def _spec_metadata_frame(specs: Sequence[ContractSpec]) -> pl.DataFrame:
-    return pl.DataFrame(
+    frame = pl.DataFrame(
         [
             {
                 "security_str": spec.ticker,
                 "FUT_CUR_GEN_TICKER": spec.ticker,
                 "security_prefix": spec.root,
                 "CLEAN_NAME": spec.display_name,
-                "frequency": "Monthly",
+                "frequency": "Flat" if spec.curve_mode == "flat" else "Monthly",
                 "month": spec.month_label,
                 "contract_month_yr": spec.contract_month_yr,
                 "contract_year": spec.contract_year,
@@ -348,12 +378,17 @@ def _spec_metadata_frame(specs: Sequence[ContractSpec]) -> pl.DataFrame:
                 "gal_per_bbl": spec.gal_per_bbl,
                 "native_unit": spec.native_unit,
                 "yellow_key": spec.yellow_key,
+                "_curve_mode": spec.curve_mode,
                 "_delivery_month": spec.month_number,
                 "_start_date": spec.start_date,
                 "_end_date": spec.end_date,
             }
             for spec in specs
         ]
+    )
+    return frame.with_columns(
+        pl.col("contract_year").cast(pl.Int64, strict=False),
+        pl.col("_delivery_month").cast(pl.Int64, strict=False),
     )
 
 
@@ -390,7 +425,10 @@ def _normalize_existing_frame(
         + (pl.col("date").dt.month() >= pl.col("_delivery_month")).cast(pl.Int64)
     )
     source = source.with_columns(
-        (pl.col("contract_year") - nearest_delivery_year + 1).alias("reference"),
+        pl.when(pl.col("_curve_mode") == "flat")
+        .then(pl.lit(1))
+        .otherwise(pl.col("contract_year") - nearest_delivery_year + 1)
+        .alias("reference"),
         pl.col("date").dt.year().alias("year"),
     ).filter(
         pl.col("date").is_not_null()
@@ -512,6 +550,92 @@ def validate_canonical_frame(
     ).height
     if bad_reference:
         issues.append(f"{bad_reference} rows have an invalid dated-contract reference")
+
+    for root in config.enabled_roots:
+        root_frame = frame.filter(pl.col("security_prefix") == root.root)
+        if not root_frame.height:
+            continue
+        frequency = (
+            pl.col("frequency")
+            .cast(pl.Utf8, strict=False)
+            .str.strip_chars()
+            .str.to_lowercase()
+        )
+        if root.curve_mode == "flat":
+            ticker_count = root_frame["security_str"].drop_nulls().n_unique()
+            if ticker_count != 1 or root_frame["security_str"].null_count():
+                issues.append(
+                    f"{root.root} flat curve must contain exactly one non-null security; "
+                    f"found {ticker_count}"
+                )
+            bad_frequency = root_frame.filter(
+                pl.col("frequency").is_null() | (frequency != "flat")
+            ).height
+            if bad_frequency:
+                issues.append(f"{bad_frequency} {root.root} flat rows must use frequency Flat")
+            bad_month = root_frame.filter(
+                pl.col("month").is_not_null()
+                & (pl.col("month").cast(pl.Utf8, strict=False).str.strip_chars() != "")
+            ).height
+            if bad_month:
+                issues.append(f"{bad_month} {root.root} flat rows must have a blank month")
+            bad_contract = root_frame.filter(
+                pl.col("contract_month_yr").is_not_null()
+                & (
+                    pl.col("contract_month_yr")
+                    .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
+                    != ""
+                )
+            ).height
+            if bad_contract:
+                issues.append(
+                    f"{bad_contract} {root.root} flat rows must have a blank contract_month_yr"
+                )
+            bad_contract_year = root_frame.filter(pl.col("contract_year").is_not_null()).height
+            if bad_contract_year:
+                issues.append(
+                    f"{bad_contract_year} {root.root} flat rows must have a null contract_year"
+                )
+            bad_flat_reference = root_frame.filter(
+                pl.col("reference").is_null() | (pl.col("reference") != 1)
+            ).height
+            if bad_flat_reference:
+                issues.append(
+                    f"{bad_flat_reference} {root.root} flat rows must use reference 1"
+                )
+        else:
+            bad_frequency = root_frame.filter(
+                pl.col("frequency").is_null() | (frequency != "monthly")
+            ).height
+            if bad_frequency:
+                issues.append(
+                    f"{bad_frequency} {root.root} dated rows must use frequency Monthly"
+                )
+            bad_month = root_frame.filter(
+                pl.col("month").is_null()
+                | (pl.col("month").cast(pl.Utf8, strict=False).str.strip_chars() == "")
+            ).height
+            if bad_month:
+                issues.append(f"{bad_month} {root.root} dated rows are missing month metadata")
+            bad_contract = root_frame.filter(
+                pl.col("contract_month_yr").is_null()
+                | (
+                    pl.col("contract_month_yr")
+                    .cast(pl.Utf8, strict=False)
+                    .str.strip_chars()
+                    == ""
+                )
+            ).height
+            if bad_contract:
+                issues.append(
+                    f"{bad_contract} {root.root} dated rows are missing contract_month_yr metadata"
+                )
+            bad_contract_year = root_frame.filter(pl.col("contract_year").is_null()).height
+            if bad_contract_year:
+                issues.append(
+                    f"{bad_contract_year} {root.root} dated rows are missing contract_year metadata"
+                )
 
     precision_columns = list(config.update.fields) + ["bbl_per_mt", "gal_per_bbl"]
     scale = float(10**PRECISION)
@@ -737,13 +861,15 @@ def run_bloomberg_update(
         price_fields = [
             field for field in config.update.fields if field in SUPPORTED_PRICE_FIELDS
         ]
+        dashboard_fields = list(config.update.dashboard_fields)
         export_summary = export_dashboard(
             data_path=str(staged_csv),
             root_config_path=str(output_paths.config),
             output=str(staged_html),
             embedded_js_output=str(staged_embedded_js),
             compact_parquet_output=str(staged_parquet),
-            fields=price_fields,
+            fields=dashboard_fields,
+            parquet_fields=price_fields,
             precision=PRECISION,
             max_output_mb=config.update.standalone_max_mb,
             include_analytics=any(
@@ -780,6 +906,7 @@ def run_bloomberg_update(
             "config_sha256": _sha256(output_paths.config),
             "git_revision": _git_revision(),
             "requested_fields": list(config.update.fields),
+            "dashboard_fields": dashboard_fields,
             "requested_securities": len(requests),
             "universe_securities": len(specs),
             "received_rows": pulled.height,
@@ -787,11 +914,16 @@ def run_bloomberg_update(
             "data_min_date": combined["date"].min().isoformat(),
             "data_max_date": combined["date"].max().isoformat(),
             "root_coverage": _root_stats(combined),
+            "curve_modes": {
+                root.root: root.curve_mode
+                for root in sorted(config.enabled_roots, key=lambda item: item.root)
+            },
             "warnings": list(dict.fromkeys(str(item) for item in pull_warnings)),
             "export": {
                 "rows": export_summary["rows"],
                 "roots": export_summary["roots"],
                 "fields": export_summary["fields"],
+                "parquet_fields": export_summary["parquet_fields"],
                 "standalone_mb": export_summary["output_mb"],
             },
             "artifacts": artifact_manifest,

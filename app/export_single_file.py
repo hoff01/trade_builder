@@ -376,6 +376,10 @@ def _normalize_root_entry(entry: dict, fallback_root="") -> tuple[str, dict]:
         or entry.get("tickerTemplate")
         or "{root}{month_code}{yy} {yellow_key}"
     ).strip()
+    curve_mode = str(
+        entry.get("curve_mode") or entry.get("curveMode") or "monthly"
+    ).strip().lower()
+    normalized["curve_mode"] = "flat" if curve_mode in {"flat", "flat forward", "monthless", "spot"} else "monthly"
     normalized["tradingview_symbol"] = str(
         entry.get("tradingview_symbol")
         or entry.get("tradingview")
@@ -520,6 +524,7 @@ def _apply_root_configuration(
         "native_unit": "native_unit",
         "yellow_key": "yellow_key",
         "ticker_template": "ticker_template",
+        "curve_mode": "curve_mode",
         "tradingview_symbol": "tradingview_symbol",
     }
     expressions = []
@@ -1200,6 +1205,7 @@ def embed_into_html(
     )
     embedded_block = (
         f'<script id="embedded-data" type="application/octet-stream">{data_b64}</script>\n'
+        '<script>window.DASHBOARD_OWNER_UPDATE_API = false;</script>\n'
         f'<script>\n{dom_loader}\n</script>\n'
         + (f'<script>\n{theme_js}\n</script>\n' if theme_js else '')
         + (f'<script>\n{plotly_js}\n</script>\n' if plotly_js else '')
@@ -1265,6 +1271,7 @@ def export_dashboard(
     compact_parquet_output: str = "",
     data_json: str = "",
     fields=None,
+    parquet_fields=None,
     precision: int = DEFAULT_PRECISION,
     unit: str = "$/bbl",
     template: str = DEFAULT_TEMPLATE,
@@ -1281,6 +1288,7 @@ def export_dashboard(
     if precision < 0 or precision > DEFAULT_PRECISION:
         raise ValueError(f"precision must be between 0 and {DEFAULT_PRECISION}.")
     selected_fields = _parse_fields(fields)
+    selected_parquet_fields = _parse_fields(parquet_fields)
     overrides = column_overrides or {}
 
     df = _load_dataframe(data_path)
@@ -1302,23 +1310,34 @@ def export_dashboard(
         volume_col = None
         vol_30d_col = None
 
-    field_columns = {
+    source_field_columns = {
         "PX_LAST": overrides.get("px_last") or _pick_column(df.columns, PX_LAST_CANDIDATES),
         "PX_CLOSE": overrides.get("px_close") or _pick_column(df.columns, PX_CLOSE_CANDIDATES),
         "PX_SETTLE": overrides.get("px_settle") or _pick_column(df.columns, PX_SETTLE_CANDIDATES),
         "PX_FAIR_1430": overrides.get("px_fair") or _pick_column(df.columns, PX_FAIR_CANDIDATES),
     }
     if selected_fields is None:
-        selected_fields = [field for field in SUPPORTED_PRICE_FIELDS if field_columns.get(field)]
+        selected_fields = [field for field in SUPPORTED_PRICE_FIELDS if source_field_columns.get(field)]
     else:
-        missing_fields = [field for field in selected_fields if not field_columns.get(field)]
+        missing_fields = [field for field in selected_fields if not source_field_columns.get(field)]
         if missing_fields:
             raise ValueError(
                 "Requested price fields are missing from the source: " + ", ".join(missing_fields)
             )
+    if selected_parquet_fields is None:
+        selected_parquet_fields = list(selected_fields)
+    else:
+        missing_parquet_fields = [
+            field for field in selected_parquet_fields if not source_field_columns.get(field)
+        ]
+        if missing_parquet_fields:
+            raise ValueError(
+                "Requested Parquet fields are missing from the source: "
+                + ", ".join(missing_parquet_fields)
+            )
     field_columns = {
         field: (column if field in selected_fields else None)
-        for field, column in field_columns.items()
+        for field, column in source_field_columns.items()
     }
     value_col = field_columns.get("PX_LAST") or next(
         (field_columns[field] for field in selected_fields if field_columns.get(field)),
@@ -1363,13 +1382,9 @@ def export_dashboard(
         parquet_path = Path(compact_parquet_output)
         parquet_path.parent.mkdir(parents=True, exist_ok=True)
         unselected_columns = {
-            column for field, column in {
-                "PX_LAST": _pick_column(df.columns, PX_LAST_CANDIDATES),
-                "PX_CLOSE": _pick_column(df.columns, PX_CLOSE_CANDIDATES),
-                "PX_SETTLE": _pick_column(df.columns, PX_SETTLE_CANDIDATES),
-                "PX_FAIR_1430": _pick_column(df.columns, PX_FAIR_CANDIDATES),
-            }.items()
-            if field not in selected_fields and column
+            column
+            for field, column in source_field_columns.items()
+            if field not in selected_parquet_fields and column
         }
         compact_df = df.drop(sorted(unselected_columns)) if unselected_columns else df
         compact_df.write_parquet(
@@ -1493,6 +1508,7 @@ def export_dashboard(
         "rows": df.height,
         "roots": exported_roots,
         "fields": selected_fields,
+        "parquet_fields": selected_parquet_fields,
         "analytics_included": bool(include_analytics),
         "data_max_date": payload_data_max_date,
         "built_at": payload_built_at,
@@ -1508,6 +1524,7 @@ def main():
     parser.add_argument("--data-path", required=True, help="Required Parquet/CSV/IPC/Feather pricing data path.")
     parser.add_argument("--root-config", default=DEFAULT_ROOT_CONFIG, help="Security-root workbook path.")
     parser.add_argument("--fields", default="", help="Comma-separated price fields; default preserves every available standard field.")
+    parser.add_argument("--parquet-fields", default="", help="Comma-separated price fields retained in compact Parquet; default matches --fields.")
     parser.add_argument("--precision", type=int, choices=range(DEFAULT_PRECISION + 1), default=DEFAULT_PRECISION)
     parser.add_argument("--date-col", default="", help="Date column name.")
     parser.add_argument("--security-col", default="", help="Security/ticker column name.")
@@ -1574,6 +1591,7 @@ def main():
             compact_parquet_output=args.compact_parquet_output,
             data_json=args.data_json,
             fields=args.fields,
+            parquet_fields=args.parquet_fields,
             precision=args.precision,
             unit=args.unit,
             template=args.template,

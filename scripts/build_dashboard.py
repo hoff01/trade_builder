@@ -12,7 +12,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.export_single_file import DEFAULT_PRECISION, export_dashboard
+from app.export_single_file import DEFAULT_PRECISION, SUPPORTED_PRICE_FIELDS, export_dashboard
+from app.root_config import load_root_config
 
 
 DEFAULT_DATA = PROJECT_ROOT / "data" / "sample_market_data.parquet"
@@ -42,7 +43,12 @@ def main() -> int:
     parser.add_argument(
         "--fields",
         default="",
-        help="Comma-separated price fields; default keeps all available PX_LAST/PX_CLOSE/PX_SETTLE/PX_FAIR_1430.",
+        help="Comma-separated price fields embedded in the dashboard; default uses Bloomberg Update dashboard_fields.",
+    )
+    parser.add_argument(
+        "--parquet-fields",
+        default="",
+        help="Comma-separated price fields retained in Parquet; default uses supported Bloomberg Update fields.",
     )
     parser.add_argument(
         "--precision",
@@ -65,13 +71,19 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        root_config = load_root_config(args.config)
+        dashboard_fields = args.fields or ",".join(root_config.update.dashboard_fields)
+        parquet_fields = args.parquet_fields or ",".join(
+            field for field in root_config.update.fields if field in SUPPORTED_PRICE_FIELDS
+        )
         summary = export_dashboard(
             data_path=args.data,
             root_config_path=args.config,
             output=args.output,
             embedded_js_output=args.embedded_js_output,
             compact_parquet_output=args.parquet_output,
-            fields=args.fields,
+            fields=dashboard_fields,
+            parquet_fields=parquet_fields,
             precision=args.precision,
             max_output_mb=args.max_output_mb,
             include_analytics=args.include_analytics,
@@ -81,9 +93,11 @@ def main() -> int:
 
     roots = ", ".join(summary["roots"])
     fields = ", ".join(summary["fields"])
+    parquet_fields = ", ".join(summary["parquet_fields"])
     print(f"Data max date: {summary['data_max_date']}")
     print(f"Roots: {roots}")
     print(f"Fields: {fields}")
+    print(f"Parquet fields: {parquet_fields}")
     return 0
 
 

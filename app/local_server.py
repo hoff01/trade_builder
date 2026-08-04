@@ -168,7 +168,9 @@ class DashboardRequestHandler(SimpleHTTPRequestHandler):
     server: LocalDashboardServer
 
     def end_headers(self) -> None:
-        self.send_header("Cache-Control", "no-store")
+        request_path = urlsplit(self.path).path
+        cache_control = "no-store" if request_path.startswith("/api/") else "private, no-cache"
+        self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()

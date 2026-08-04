@@ -1,7 +1,8 @@
-enabled,root,common_name,yellow_key,native_unit,bbl_per_mt,gal_per_bbl,ticker_template,tradingview_symbol,aliases,product_group,sort_order
-True,WU,GC Jet,Comdty,cpg,7.45,42,{root}{month_code}{y} {yellow_key},NYMEX:WU,ME|GC JET,Refined Products,10
-True,HO,Heating Oil,Comdty,cpg,7.45,42,{root}{month_code}{y} {yellow_key},NYMEX:HO,ULSD|HEATING OIL,Refined Products,20
-True,RB,RBOB Gasoline,Comdty,cpg,8.33,42,{root}{month_code}{y} {yellow_key},NYMEX:RB,RBOB,Refined Products,30
-True,QS,ICE Low Sulphur Gasoil,Comdty,$/MT,7.45,42,{root}{month_code}{y} {yellow_key},ICEEUR:QS1!,GASOIL|LSGO,Refined Products,40
-True,CL,WTI Crude Oil,Comdty,$/bbl,7.33,42,{root}{month_code}{y} {yellow_key},NYMEX:CL,WTI,Crude,50
-True,CO,Brent Crude Oil,Comdty,$/bbl,7.33,42,{root}{month_code}{y} {yellow_key},TVC:UKOIL,BRENT,Crude,60
+enabled,root,common_name,yellow_key,native_unit,bbl_per_mt,gal_per_bbl,ticker_template,curve_mode,tradingview_symbol,aliases,product_group,sort_order
+True,WU,GC Jet,Comdty,cpg,7.45,42,{root}{month_code}{y} {yellow_key},Monthly,NYMEX:WU,ME|GC JET,Refined Products,10
+True,HO,Heating Oil,Comdty,cpg,7.45,42,{root}{month_code}{y} {yellow_key},Monthly,NYMEX:HO,ULSD|HEATING OIL,Refined Products,20
+True,RB,RBOB Gasoline,Comdty,cpg,8.33,42,{root}{month_code}{y} {yellow_key},Monthly,NYMEX:RB,RBOB,Refined Products,30
+True,RVO,RVO,Index,cpg,7.45,42,{root} {yellow_key},Flat,,RENEWABLE VOLUME OBLIGATION,Renewable Fuels,35
+True,QS,ICE Low Sulphur Gasoil,Comdty,$/MT,7.45,42,{root}{month_code}{y} {yellow_key},Monthly,ICEEUR:QS1!,GASOIL|LSGO,Refined Products,40
+True,CL,WTI Crude Oil,Comdty,$/bbl,7.33,42,{root}{month_code}{y} {yellow_key},Monthly,NYMEX:CL,WTI,Crude,50
+True,CO,Brent Crude Oil,Comdty,$/bbl,7.33,42,{root}{month_code}{y} {yellow_key},Monthly,TVC:UKOIL,BRENT,Crude,60

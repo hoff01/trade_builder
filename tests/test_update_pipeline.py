@@ -14,16 +14,19 @@ import polars as pl
 from app.bloomberg_client import BloombergPullResult
 from app.root_config import ROOT_COLUMNS, UPDATE_SHEET_NAME, load_root_config
 from app.update_pipeline import (
+    UpdateError,
     UpdatePaths,
     build_contract_universe,
     normalize_bloomberg_rows,
     run_bloomberg_update,
+    validate_canonical_frame,
 )
 
 
 ROOT_ROWS = (
-    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "NYMEX:WU", "ME", "Refined", 1),
-    (True, "HO", "Heating Oil", "Index", "$/gal", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "NYMEX:HO", "", "Refined", 2),
+    (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "Monthly", "NYMEX:WU", "ME", "Refined", 1),
+    (True, "HO", "Heating Oil", "Index", "$/gal", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:HO", "", "Refined", 2),
+    (True, "RVO", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 3),
 )
 
 
@@ -44,6 +47,7 @@ def write_config(path: Path, *, max_mb: float = 20.0) -> None:
         ("reference_depth", 2),
         ("overlap_days", 7),
         ("fields", "PX_LAST,PX_CLOSE,PX_SETTLE,PX_FAIR_1430"),
+        ("dashboard_fields", "PX_LAST"),
         ("host", "localhost"),
         ("port", 8194),
         ("service", "//blp/refdata"),
@@ -100,12 +104,46 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertIn("HOF6 Index", tickers)
         self.assertIn("HOG6 Index", tickers)
         self.assertIn("HOZ6 Index", tickers)
+        self.assertIn("RVO Index", tickers)
+        self.assertEqual(sum(ticker == "RVO Index" for ticker in tickers), 1)
 
     def test_default_workbook_generates_hog6_comdty(self) -> None:
         config = load_root_config("config/security_roots.xlsx")
         specs = build_contract_universe(config, date(2026, 8, 3))
         tickers = {spec.ticker for spec in specs}
         self.assertIn("HOG6 Comdty", tickers)
+        self.assertIn("RVO Index", tickers)
+
+    def test_rvo_is_one_monthless_flat_curve_request(self) -> None:
+        config = load_root_config(self.config_path)
+        specs = [
+            spec
+            for spec in build_contract_universe(config, date(2026, 8, 3))
+            if spec.root == "RVO"
+        ]
+        self.assertEqual(len(specs), 1)
+        spec = specs[0]
+        self.assertEqual(spec.ticker, "RVO Index")
+        self.assertEqual(spec.curve_mode, "flat")
+        self.assertEqual(spec.month_label, "")
+        self.assertIsNone(spec.contract_year)
+        self.assertEqual(spec.start_date, date(2024, 1, 1))
+        self.assertEqual(spec.end_date, date(2026, 8, 3))
+
+        frame, warnings = normalize_bloomberg_rows(
+            (
+                {"security": "RVO Index", "date": date(2026, 8, 1), "PX_LAST": 18.1234567, "PX_CLOSE": 18.0, "PX_SETTLE": 18.1, "PX_FAIR_1430": 18.2},
+                {"security": "RVO Index", "date": date(2026, 8, 2), "PX_LAST": 19.1234567, "PX_CLOSE": 19.0, "PX_SETTLE": 19.1, "PX_FAIR_1430": 19.2},
+            ),
+            (spec,),
+            config.update.fields,
+            reference_depth=2,
+        )
+        self.assertFalse(warnings)
+        self.assertEqual(frame["frequency"].unique().to_list(), ["Flat"])
+        self.assertEqual(frame["month"].unique().to_list(), [""])
+        self.assertEqual(frame["reference"].unique().to_list(), [1])
+        self.assertEqual(frame["PX_LAST"].to_list(), [18.12346, 19.12346])
 
     def test_reference_is_derived_from_contract_and_observation_dates(self) -> None:
         config = load_root_config(self.config_path)
@@ -127,6 +165,66 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertEqual(frame["reference"].to_list(), [2, 1])
         self.assertEqual(frame["PX_LAST"].to_list(), [1.12346, 2.12346])
 
+    def test_publish_validation_rejects_malformed_flat_curve_metadata(self) -> None:
+        config = load_root_config(self.config_path)
+        specs = build_contract_universe(config, date(2026, 8, 3))
+        rows = tuple(
+            {
+                "security": spec.ticker,
+                "date": spec.end_date,
+                "PX_LAST": 100.0,
+                "PX_CLOSE": 100.0,
+                "PX_SETTLE": 100.0,
+                "PX_FAIR_1430": 100.0,
+            }
+            for spec in specs
+        )
+        frame, warnings = normalize_bloomberg_rows(
+            rows,
+            specs,
+            config.update.fields,
+            reference_depth=config.update.reference_depth,
+        )
+        self.assertFalse(warnings)
+        validate_canonical_frame(frame, config, specs, date(2026, 8, 3))
+
+        malformed = frame.with_columns(
+            pl.when(pl.col("security_prefix") == "RVO")
+            .then(pl.lit("Monthly"))
+            .otherwise(pl.col("frequency"))
+            .alias("frequency"),
+            pl.when(pl.col("security_prefix") == "RVO")
+            .then(pl.lit("Jan"))
+            .otherwise(pl.col("month"))
+            .alias("month"),
+            pl.when(pl.col("security_prefix") == "RVO")
+            .then(pl.lit("F26"))
+            .otherwise(pl.col("contract_month_yr"))
+            .alias("contract_month_yr"),
+            pl.when(pl.col("security_prefix") == "RVO")
+            .then(pl.lit(2026))
+            .otherwise(pl.col("contract_year"))
+            .alias("contract_year"),
+            pl.when(pl.col("security_prefix") == "RVO")
+            .then(pl.lit(2))
+            .otherwise(pl.col("reference"))
+            .alias("reference"),
+        )
+        extra_flat_security = malformed.filter(pl.col("security_prefix") == "RVO").head(1).with_columns(
+            pl.lit("RVOALT Index").alias("security_str")
+        )
+        malformed = pl.concat([malformed, extra_flat_security], how="vertical_relaxed")
+
+        with self.assertRaises(UpdateError) as context:
+            validate_canonical_frame(malformed, config, specs, date(2026, 8, 3))
+        message = str(context.exception)
+        self.assertIn("RVO flat curve must contain exactly one non-null security", message)
+        self.assertIn("RVO flat rows must use frequency Flat", message)
+        self.assertIn("RVO flat rows must have a blank month", message)
+        self.assertIn("RVO flat rows must have a blank contract_month_yr", message)
+        self.assertIn("RVO flat rows must have a null contract_year", message)
+        self.assertIn("RVO flat rows must use reference 1", message)
+
     def test_fake_update_writes_csv_gzip_parquet_html_and_manifest(self) -> None:
         client = FakeClient([])
         summary = run_bloomberg_update(
@@ -147,9 +245,14 @@ class UpdatePipelineTests(unittest.TestCase):
         csv_frame = pl.read_csv(self.paths.csv, try_parse_dates=True)
         parquet_frame = pl.read_parquet(self.paths.parquet)
         self.assertEqual(csv_frame.height, parquet_frame.height)
-        self.assertEqual(set(csv_frame["security_prefix"]), {"WU", "HO"})
-        self.assertEqual(set(csv_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil"})
-        self.assertEqual(set(parquet_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil"})
+        self.assertEqual(set(csv_frame["security_prefix"]), {"WU", "HO", "RVO"})
+        self.assertEqual(set(csv_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil", "RVO"})
+        self.assertEqual(set(parquet_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil", "RVO"})
+        self.assertTrue(
+            {"PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"}.issubset(
+                parquet_frame.columns
+            )
+        )
         self.assertTrue(
             csv_frame.select((pl.col("PX_LAST") == pl.col("PX_LAST").round(5)).all()).item()
         )
@@ -163,7 +266,21 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "complete")
         self.assertEqual(manifest["source"], "Bloomberg Desktop API")
         self.assertEqual(manifest["retained_rows"], csv_frame.height)
-        self.assertEqual(set(manifest["root_coverage"]), {"WU", "HO"})
+        self.assertEqual(set(manifest["root_coverage"]), {"WU", "HO", "RVO"})
+        self.assertEqual(
+            manifest["requested_fields"],
+            ["PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"],
+        )
+        self.assertEqual(manifest["dashboard_fields"], ["PX_LAST"])
+        self.assertEqual(
+            manifest["curve_modes"],
+            {"HO": "monthly", "RVO": "flat", "WU": "monthly"},
+        )
+        self.assertEqual(manifest["export"]["fields"], ["PX_LAST"])
+        self.assertEqual(
+            manifest["export"]["parquet_fields"],
+            ["PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"],
+        )
 
     def test_incremental_update_preserves_expired_history_and_replaces_overlap(self) -> None:
         first = FakeClient([], price=100.000001)
@@ -189,6 +306,7 @@ class UpdatePipelineTests(unittest.TestCase):
             all(
                 (ticker.startswith("WU") and ticker.endswith("26 Comdty"))
                 or (ticker.startswith("HO") and ticker.endswith("6 Index"))
+                or ticker == "RVO Index"
                 for ticker in requested
             )
         )

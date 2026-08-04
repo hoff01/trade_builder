@@ -33,8 +33,13 @@ class LocalServerTests(unittest.TestCase):
 
     def test_status_exposes_api_but_disables_update_without_blpapi(self) -> None:
         with patch("app.local_server.bloomberg_client.is_bloomberg_available", return_value=False):
-            status, payload = self.json_request("/api/update/status")
+            request = Request(self.base_url + "/api/update/status", headers={"Accept": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                status = response.status
+                payload = json.loads(response.read())
+                cache_control = response.headers["Cache-Control"]
         self.assertEqual(status, 200)
+        self.assertEqual(cache_control, "no-store")
         self.assertTrue(payload["update_api"])
         self.assertFalse(payload["available"])
         self.assertIn("blpapi", payload["message"])
@@ -42,8 +47,10 @@ class LocalServerTests(unittest.TestCase):
     def test_static_dashboard_is_served_from_fixed_root(self) -> None:
         with urlopen(self.base_url + "/", timeout=5) as response:
             html = response.read().decode("utf-8")
+            cache_control = response.headers["Cache-Control"]
         self.assertIn("Pricing Dashboard", html)
         self.assertIn('id="data-update"', html)
+        self.assertEqual(cache_control, "private, no-cache")
         with self.assertRaises(HTTPError) as raised:
             urlopen(self.base_url + "/../../README.md", timeout=5)
         self.assertEqual(raised.exception.code, 404)
