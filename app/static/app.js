@@ -3517,42 +3517,23 @@ function combineLegSeries(legSeries) {
     const yearSets = legSeries.map((item) => new Set(Object.keys(item.series)));
     const sharedYears = Array.from(yearSets[0]).filter((year) => yearSets.every((set) => set.has(year)));
     const combined = {};
+    let interpolatedPoints = 0;
 
     sharedYears.forEach((year) => {
         const perLeg = legSeries.map((item) => item.series[year]).filter(Boolean);
         if (perLeg.length !== legSeries.length) return;
-        const xSets = perLeg.map((series) => {
-            const set = new Set();
-            if (!series || !Array.isArray(series.x)) return set;
-            series.x.forEach((value) => {
-                if (Number.isFinite(value)) set.add(value);
-            });
-            return set;
-        });
-        if (!xSets.length) return;
-        let intersection = xSets[0];
-        for (let i = 1; i < xSets.length; i++) {
-            intersection = new Set(Array.from(intersection).filter((val) => xSets[i].has(val)));
-        }
-        const x = Array.from(intersection).sort((a, b) => a - b);
-        if (!x.length) return;
-        const lookups = legSeries.map((item) => {
-            const series = item.series[year];
-            return buildSeriesLookup(series);
-        });
-        const y = x.map((xVal) => {
-            const values = [];
-            for (let i = 0; i < legSeries.length; i++) {
-                const item = legSeries[i];
-                const ratio = Number(item.leg.ratio);
-                if (!Number.isFinite(ratio) || ratio === 0) continue;
-                const value = lookups[i].get(String(xVal));
-                if (!Number.isFinite(value)) return null;
-                values.push({ value, ratio, native_unit: state.unit });
-            }
-            return TRADE_MATH.weightedSum(values, state.unit);
-        });
-        combined[year] = { x, y };
+        const aligned = TRADE_MATH.combineWeightedSeries(
+            legSeries.map((item, index) => ({
+                series: perLeg[index],
+                ratio: Number(item.leg.ratio),
+                native_unit: state.unit
+            })),
+            state.unit,
+            { maxSpanDays: TRADE_MATH.DEFAULT_INTERPOLATION_MAX_SPAN_DAYS }
+        );
+        if (!aligned.x.length) return;
+        interpolatedPoints += aligned.interpolatedPoints;
+        combined[year] = { x: aligned.x, y: aligned.y };
     });
 
     if (!Object.keys(combined).length) return null;
@@ -3561,7 +3542,15 @@ function combineLegSeries(legSeries) {
     const varStats = latestSeries
         ? calculateVarStats(latestSeries.y.filter((value) => typeof value === 'number'))
         : { p90: 0, p95: 0, p99: 0 };
-    return { series: combined, var: varStats };
+    return {
+        series: combined,
+        var: varStats,
+        interpolation: {
+            method: 'linear',
+            maxSpanDays: TRADE_MATH.DEFAULT_INTERPOLATION_MAX_SPAN_DAYS,
+            points: interpolatedPoints
+        }
+    };
 }
 
 function hasLegMonth(leg) {

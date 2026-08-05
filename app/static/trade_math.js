@@ -8,6 +8,7 @@
     'use strict';
 
     const MAX_DECIMALS = 5;
+    const DEFAULT_INTERPOLATION_MAX_SPAN_DAYS = 7;
     const DEFAULT_BBL_PER_MT = 7.33;
     const DEFAULT_GAL_PER_BBL = 42;
     const MONTH_CODES = Object.freeze({
@@ -175,6 +176,118 @@
         return used ? round5(total) : 0;
     }
 
+    function interpolateSeriesAtTargets(series, targets, maxSpanDays) {
+        const outputX = Array.isArray(targets) ? targets.map(Number) : [];
+        const outputY = Array(outputX.length).fill(null);
+        const interpolated = Array(outputX.length).fill(false);
+        if (!series || !Array.isArray(series.x) || !Array.isArray(series.y) || !outputX.length) {
+            return { x: outputX, y: outputY, interpolated };
+        }
+
+        const byX = new Map();
+        const length = Math.min(series.x.length, series.y.length);
+        for (let index = 0; index < length; index++) {
+            const x = asFinite(series.x[index]);
+            const y = asFinite(series.y[index]);
+            if (x == null || y == null) continue;
+            byX.set(x, y);
+        }
+        const points = Array.from(byX, ([x, y]) => ({ x, y })).sort((a, b) => a.x - b.x);
+        if (!points.length) return { x: outputX, y: outputY, interpolated };
+
+        const requestedSpan = asFinite(maxSpanDays);
+        const maxSpan = requestedSpan != null && requestedSpan > 0
+            ? requestedSpan
+            : DEFAULT_INTERPOLATION_MAX_SPAN_DAYS;
+
+        outputX.forEach((target, outputIndex) => {
+            if (!Number.isFinite(target)) return;
+            if (byX.has(target)) {
+                outputY[outputIndex] = byX.get(target);
+                return;
+            }
+
+            let low = 0;
+            let high = points.length;
+            while (low < high) {
+                const middle = Math.floor((low + high) / 2);
+                if (points[middle].x < target) low = middle + 1;
+                else high = middle;
+            }
+            const previous = low > 0 ? points[low - 1] : null;
+            const next = low < points.length ? points[low] : null;
+            if (!previous || !next || previous.x >= target || next.x <= target) return;
+            const span = next.x - previous.x;
+            if (!Number.isFinite(span) || span <= 0 || span > maxSpan) return;
+            const fraction = (target - previous.x) / span;
+            outputY[outputIndex] = round5(previous.y + ((next.y - previous.y) * fraction));
+            interpolated[outputIndex] = true;
+        });
+
+        return { x: outputX, y: outputY, interpolated };
+    }
+
+    function combineWeightedSeries(legs, targetUnit, options) {
+        if (!Array.isArray(legs) || !legs.length) {
+            return { x: [], y: [], interpolatedPoints: 0 };
+        }
+        const settings = options && typeof options === 'object' ? options : {};
+        const maxSpanDays = settings.maxSpanDays;
+        const prepared = [];
+        const targetSet = new Set();
+
+        for (const leg of legs) {
+            if (!leg || !leg.series || !Array.isArray(leg.series.x) || !Array.isArray(leg.series.y)) {
+                return { x: [], y: [], interpolatedPoints: 0 };
+            }
+            const ratio = asFinite(leg.ratio != null ? leg.ratio : leg.weight);
+            if (ratio == null) return { x: [], y: [], interpolatedPoints: 0 };
+            if (ratio === 0) continue;
+            const length = Math.min(leg.series.x.length, leg.series.y.length);
+            for (let index = 0; index < length; index++) {
+                const x = asFinite(leg.series.x[index]);
+                const y = asFinite(leg.series.y[index]);
+                if (x != null && y != null) targetSet.add(x);
+            }
+            prepared.push({ ...leg, ratio });
+        }
+        if (!prepared.length) {
+            return { x: [], y: [], interpolatedPoints: 0 };
+        }
+
+        const targets = Array.from(targetSet).sort((a, b) => a - b);
+        const aligned = prepared.map((leg) => (
+            interpolateSeriesAtTargets(leg.series, targets, maxSpanDays)
+        ));
+        const x = [];
+        const y = [];
+        let interpolatedPoints = 0;
+
+        targets.forEach((target, targetIndex) => {
+            const weightedLegs = [];
+            let usedInterpolation = 0;
+            for (let legIndex = 0; legIndex < prepared.length; legIndex++) {
+                const value = aligned[legIndex].y[targetIndex];
+                if (!Number.isFinite(value)) return;
+                if (aligned[legIndex].interpolated[targetIndex]) usedInterpolation += 1;
+                const leg = prepared[legIndex];
+                weightedLegs.push({
+                    value,
+                    ratio: leg.ratio,
+                    native_unit: leg.nativeUnit || leg.native_unit || leg.unit || targetUnit,
+                    config: leg.config
+                });
+            }
+            const total = weightedSum(weightedLegs, targetUnit, settings.defaultConfig);
+            if (!Number.isFinite(total)) return;
+            x.push(target);
+            y.push(total);
+            interpolatedPoints += usedInterpolation;
+        });
+
+        return { x, y, interpolatedPoints };
+    }
+
     function monthToCode(month) {
         const value = String(month == null ? '' : month).trim().toUpperCase();
         if (new RegExp(`^${CONTRACT_MONTH_PATTERN}$`).test(value)) return value;
@@ -289,6 +402,7 @@
 
     return Object.freeze({
         MAX_DECIMALS,
+        DEFAULT_INTERPOLATION_MAX_SPAN_DAYS,
         DEFAULT_BBL_PER_MT,
         DEFAULT_GAL_PER_BBL,
         MONTH_CODES,
@@ -304,6 +418,8 @@
         convertValue,
         conversionFactor,
         weightedSum,
+        interpolateSeriesAtTargets,
+        combineWeightedSeries,
         monthToCode,
         expandContractYear,
         parseTicker,

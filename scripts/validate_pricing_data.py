@@ -146,10 +146,10 @@ def count_numeric_coercion_failures(df: pl.DataFrame, col: str) -> int:
 
 def count_values_over_precision(df: pl.DataFrame, col: str, decimals: int) -> int:
     numeric = pl.col(col).cast(pl.Float64, strict=False)
-    scale = float(10**decimals)
     return df.filter(
         numeric.is_not_null()
-        & (((numeric * scale) - (numeric * scale).round(0)).abs() > 1e-7)
+        & numeric.is_finite()
+        & (numeric != numeric.round(decimals))
     ).height
 
 

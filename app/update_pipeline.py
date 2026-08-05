@@ -638,11 +638,12 @@ def validate_canonical_frame(
                 )
 
     precision_columns = list(config.update.fields) + ["bbl_per_mt", "gal_per_bbl"]
-    scale = float(10**PRECISION)
     for column in precision_columns:
+        numeric = pl.col(column).cast(pl.Float64, strict=False)
         excessive = frame.filter(
-            pl.col(column).is_not_null()
-            & (((pl.col(column) * scale) - (pl.col(column) * scale).round()).abs() > 1e-7)
+            numeric.is_not_null()
+            & numeric.is_finite()
+            & (numeric != numeric.round(PRECISION))
         ).height
         if excessive:
             issues.append(f"{excessive} rows in {column} exceed {PRECISION} decimals")

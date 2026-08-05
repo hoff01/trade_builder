@@ -30,6 +30,31 @@ test('converts every mixed-unit leg before applying weights', () => {
     assert.equal(result, 22);
 });
 
+test('interpolates a holiday mismatch only between two nearby observations', () => {
+    const aligned = TradeMath.interpolateSeriesAtTargets(
+        { x: [1, 3], y: [10, 14] },
+        [0, 1, 2, 3, 4]
+    );
+    assert.deepEqual(aligned, {
+        x: [0, 1, 2, 3, 4],
+        y: [null, 10, 12, 14, null],
+        interpolated: [false, false, true, false, false]
+    });
+});
+
+test('combines holiday-mismatched legs without filling long or unbounded gaps', () => {
+    const combined = TradeMath.combineWeightedSeries([
+        { series: { x: [1, 3, 10], y: [10, 14, 30] }, ratio: 1, native_unit: '$/bbl' },
+        { series: { x: [1, 2, 3, 5, 10], y: [3, 4, 5, 6, 7] }, ratio: -1, native_unit: '$/bbl' }
+    ], '$/bbl', { maxSpanDays: 4 });
+
+    assert.deepEqual(combined, {
+        x: [1, 2, 3, 10],
+        y: [7, 8, 9, 23],
+        interpolatedPoints: 1
+    });
+});
+
 test('builds Bloomberg-style WU and HO tickers with yellow keys', () => {
     const config = {
         yellow_key: 'Comdty',

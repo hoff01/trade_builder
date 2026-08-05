@@ -106,6 +106,8 @@ The dashboard has three separate workspaces:
 
 All per-leg unit conversion occurs before ratios are applied, so mixed-unit trades are valid. The four supported price sources are `PX_LAST`, `PX_CLOSE`, `PX_SETTLE`, and `PX_FAIR_1430` when Bloomberg returns them and they are listed in `dashboard_fields`. The default portable dashboard embeds only `PX_LAST`; the companion CSV and Parquet retain every requested `fields` value.
 
+When two trade legs follow different holiday calendars, the browser calculation can linearly interpolate a missing leg value only when valid observations bracket that date within seven calendar days. It never extrapolates the beginning or end of a series and never fills a longer outage. This alignment happens only in the JavaScript trade calculation; the Bloomberg CSV and Parquet preserve the original observed dates and values.
+
 ## Add or change a security root
 
 Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **Security Roots** sheet. One row controls one Bloomberg root without a Python or JavaScript edit.

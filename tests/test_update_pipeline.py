@@ -21,6 +21,7 @@ from app.update_pipeline import (
     run_bloomberg_update,
     validate_canonical_frame,
 )
+from scripts.validate_pricing_data import count_values_over_precision
 
 
 ROOT_ROWS = (
@@ -165,6 +166,43 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertEqual(frame["reference"].to_list(), [2, 1])
         self.assertEqual(frame["PX_LAST"].to_list(), [1.12346, 2.12346])
 
+    def test_precision_validation_accepts_large_values_already_rounded(self) -> None:
+        config = load_root_config(self.config_path)
+        specs = build_contract_universe(config, date(2026, 8, 3))
+        rows = tuple(
+            {
+                "security": spec.ticker,
+                "date": spec.end_date,
+                "PX_LAST": 10000.12345,
+                "PX_CLOSE": 10000.12345,
+                "PX_SETTLE": 10000.12345,
+                "PX_FAIR_1430": 10000.12345,
+            }
+            for spec in specs
+        )
+        frame, warnings = normalize_bloomberg_rows(
+            rows,
+            specs,
+            config.update.fields,
+            reference_depth=config.update.reference_depth,
+        )
+        self.assertFalse(warnings)
+        validate_canonical_frame(frame, config, specs, date(2026, 8, 3))
+        self.assertEqual(count_values_over_precision(frame, "PX_LAST", 5), 0)
+
+        malformed = frame.with_row_index("_row").with_columns(
+            pl.when(pl.col("_row") == 0)
+            .then(pl.lit(10000.123456))
+            .otherwise(pl.col("PX_LAST"))
+            .alias("PX_LAST")
+        ).drop("_row")
+        with self.assertRaisesRegex(UpdateError, "1 rows in PX_LAST exceed 5 decimals"):
+            validate_canonical_frame(malformed, config, specs, date(2026, 8, 3))
+
+    def test_precision_validation_rejects_a_real_sixth_decimal(self) -> None:
+        frame = pl.DataFrame({"PX_LAST": [10000.12345, 10000.123456]})
+        self.assertEqual(count_values_over_precision(frame, "PX_LAST", 5), 1)
+
     def test_publish_validation_rejects_malformed_flat_curve_metadata(self) -> None:
         config = load_root_config(self.config_path)
         specs = build_contract_universe(config, date(2026, 8, 3))
@@ -226,7 +264,7 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertIn("RVO flat rows must use reference 1", message)
 
     def test_fake_update_writes_csv_gzip_parquet_html_and_manifest(self) -> None:
-        client = FakeClient([])
+        client = FakeClient([], price=10000.12345)
         summary = run_bloomberg_update(
             paths=self.paths,
             client=client,
