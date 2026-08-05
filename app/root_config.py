@@ -157,11 +157,11 @@ class UpdateSettings:
 def default_update_settings() -> UpdateSettings:
     current_year = date.today().year
     return UpdateSettings(
-        history_start=date(current_year - 7, 1, 1),
-        contract_start_year=current_year - 6,
+        history_start=date(2015, 1, 1),
+        contract_start_year=2018,
         contract_end_year=current_year + 2,
-        contract_history_months=24,
-        reference_depth=2,
+        contract_history_months=36,
+        reference_depth=3,
         overlap_days=7,
         fields=("PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"),
         dashboard_fields=("PX_LAST",),

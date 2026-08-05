@@ -49,6 +49,9 @@ class InstallContractTests(unittest.TestCase):
         self.assertIn("-InstallOnly", installer)
         self.assertIn("-m ensurepip --upgrade", bootstrap)
         self.assertIn("Test-ManagedDependencies", bootstrap)
+        self.assertIn("function Ensure-EmbeddedDashboardData", bootstrap)
+        self.assertIn("& $VenvPython $BuildDashboardPath", bootstrap)
+        self.assertIn("Ensure-EmbeddedDashboardData", bootstrap)
         self.assertNotIn(".venv", launcher)
         self.assertNotIn("py -3", launcher)
         self.assertIn(

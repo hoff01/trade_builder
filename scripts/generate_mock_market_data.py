@@ -74,7 +74,7 @@ MARKETS: dict[str, MarketSpec] = {
         price_noise=0.28,
         volume_season_amp=0.14,
     ),
-    "RB": MarketSpec(
+    "XB": MarketSpec(
         clean_name="RBOB Gasoline",
         exchange="NYMEX",
         yellow_key="Comdty",
@@ -120,7 +120,7 @@ def _season_value(month: int, phase: float = 0.0) -> float:
 
 
 def _delivery_adjustment(root: str, month: int) -> float:
-    if root == "RB":
+    if root == "XB":
         return 4.2 * _season_value(month, -math.pi / 2)
     if root in ("HO", "QS", "WU"):
         return 3.8 * _season_value(month, math.pi / 2)
@@ -175,7 +175,7 @@ def _build_spot_curves(all_dates: list[date], rng: np.random.Generator) -> dict[
         jet_crack[idx] = jet_crack[idx - 1] + 0.2 * (target - jet_crack[idx - 1]) + rng.normal(0, 0.55)
     wu = np.maximum(cl + jet_crack, 46.0)
 
-    return {"CL": cl, "CO": co, "HO": ho, "RB": rb, "QS": qs, "WU": wu}
+    return {"CL": cl, "CO": co, "HO": ho, "XB": rb, "QS": qs, "WU": wu}
 
 
 def _build_flat_rvo_curve(all_dates: list[date], seed: int) -> np.ndarray:
@@ -208,11 +208,44 @@ def _from_usd_per_bbl(value: float, spec: MarketSpec) -> float:
     raise ValueError(f"Unsupported native unit for {spec.clean_name}: {spec.native_unit}")
 
 
-def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int) -> pl.DataFrame:
+def _subtract_months(value: date, months: int) -> date:
+    month_index = value.year * 12 + value.month - 1 - int(months)
+    year, zero_based_month = divmod(month_index, 12)
+    return date(year, zero_based_month + 1, 1)
+
+
+def _collision_safe_year_suffixes(contract_years: list[int]) -> dict[int, str]:
+    extra_digits = {year: 0 for year in contract_years}
+    while True:
+        suffixes = {
+            year: str(year)[-(1 + extra_digits[year]):]
+            for year in contract_years
+        }
+        by_suffix: dict[str, list[int]] = {}
+        for year, suffix in suffixes.items():
+            by_suffix.setdefault(suffix, []).append(year)
+        collisions = [group for group in by_suffix.values() if len(group) > 1]
+        if not collisions:
+            return suffixes
+        for group in collisions:
+            for year in group:
+                extra_digits[year] += 1
+
+
+def generate_dataset(
+    start_contract_year: int,
+    end_contract_year: int,
+    seed: int,
+    *,
+    history_start: date = date(2015, 1, 1),
+    history_months: int = 36,
+) -> pl.DataFrame:
     if end_contract_year < start_contract_year:
         raise ValueError("end_contract_year must be >= start_contract_year")
+    if history_months < 1:
+        raise ValueError("history_months must be positive")
 
-    start_date = date(start_contract_year - 1, 1, 1)
+    start_date = history_start
     end_date = date(end_contract_year, 12, 31)
     all_dates = _daterange(start_date, end_date)
     date_to_idx = {d: idx for idx, d in enumerate(all_dates)}
@@ -242,57 +275,68 @@ def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int
         "gal_per_bbl": [],
     }
 
-    references = (1, 2)
+    reference_depth = 3
+    contract_years = list(range(start_contract_year, end_contract_year + 1))
+    year_suffixes = _collision_safe_year_suffixes(contract_years)
     for root, spec in MARKETS.items():
         spot = spot_curves[root]
-        for contract_year in range(start_contract_year, end_contract_year + 1):
+        for contract_year in contract_years:
             for month_idx, month_label in enumerate(MONTHS, start=1):
                 month_code = MONTH_CODES[month_idx]
                 month_yr = f"{month_code}{str(contract_year)[-2:]}"
-                ticker = f"{root}{month_yr} {spec.yellow_key}"
-                contract_start = date(contract_year - 1, month_idx, 1)
-                contract_end = date(contract_year, month_idx, 1) - timedelta(days=1)
+                ticker = f"{root}{month_code}{year_suffixes[contract_year]} {spec.yellow_key}"
+                delivery_start = date(contract_year, month_idx, 1)
+                contract_start = max(
+                    history_start,
+                    _subtract_months(delivery_start, history_months),
+                )
+                contract_end = delivery_start - timedelta(days=1)
                 contract_dates = _daterange(contract_start, contract_end)
 
-                for reference in references:
-                    for current_date in contract_dates:
-                        idx = date_to_idx[current_date]
-                        months_to_delivery = (contract_year - current_date.year) * 12 + (month_idx - current_date.month)
-                        tenor_months = max(0, months_to_delivery) + (reference - 1)
-                        volume_phase = 0.6 if root in ("HO", "QS", "WU") else -0.5 if root == "RB" else 0.0
-                        volume_season = 1.0 + spec.volume_season_amp * _season_value(current_date.month, volume_phase)
-                        liquidity = math.exp(-0.12 * tenor_months)
-                        delivery_adj = _delivery_adjustment(root, month_idx)
-                        curve_px = spot[idx] + delivery_adj + spec.carry_per_month * tenor_months
-                        settle_bbl = max(1.0, curve_px + rng.normal(0, spec.price_noise))
-                        close_bbl = max(1.0, settle_bbl + rng.normal(0, spec.price_noise * 0.55))
-                        last_bbl = max(1.0, close_bbl + rng.normal(0, spec.price_noise * 0.50))
-                        fair_1430_bbl = max(1.0, settle_bbl + rng.normal(0, spec.price_noise * 0.40))
-                        settle = _from_usd_per_bbl(settle_bbl, spec)
-                        close = _from_usd_per_bbl(close_bbl, spec)
-                        last = _from_usd_per_bbl(last_bbl, spec)
-                        fair_1430 = _from_usd_per_bbl(fair_1430_bbl, spec)
-                        volume = int(max(50, round(spec.base_volume * liquidity * volume_season * rng.lognormal(0.0, 0.15))))
+                for current_date in contract_dates:
+                    nearest_delivery_year = current_date.year + (
+                        1 if current_date.month >= month_idx else 0
+                    )
+                    reference = contract_year - nearest_delivery_year + 1
+                    if reference < 1 or reference > reference_depth:
+                        continue
+                    idx = date_to_idx[current_date]
+                    months_to_delivery = (contract_year - current_date.year) * 12 + (month_idx - current_date.month)
+                    tenor_months = max(0, months_to_delivery)
+                    volume_phase = 0.6 if root in ("HO", "QS", "WU") else -0.5 if root == "XB" else 0.0
+                    volume_season = 1.0 + spec.volume_season_amp * _season_value(current_date.month, volume_phase)
+                    liquidity = math.exp(-0.12 * tenor_months)
+                    delivery_adj = _delivery_adjustment(root, month_idx)
+                    curve_px = spot[idx] + delivery_adj + spec.carry_per_month * tenor_months
+                    settle_bbl = max(1.0, curve_px + rng.normal(0, spec.price_noise))
+                    close_bbl = max(1.0, settle_bbl + rng.normal(0, spec.price_noise * 0.55))
+                    last_bbl = max(1.0, close_bbl + rng.normal(0, spec.price_noise * 0.50))
+                    fair_1430_bbl = max(1.0, settle_bbl + rng.normal(0, spec.price_noise * 0.40))
+                    settle = _from_usd_per_bbl(settle_bbl, spec)
+                    close = _from_usd_per_bbl(close_bbl, spec)
+                    last = _from_usd_per_bbl(last_bbl, spec)
+                    fair_1430 = _from_usd_per_bbl(fair_1430_bbl, spec)
+                    volume = int(max(50, round(spec.base_volume * liquidity * volume_season * rng.lognormal(0.0, 0.15))))
 
-                        columns["date"].append(current_date)
-                        columns["security_str"].append(ticker)
-                        columns["FUT_CUR_GEN_TICKER"].append(ticker)
-                        columns["security_prefix"].append(root)
-                        columns["CLEAN_NAME"].append(spec.clean_name)
-                        columns["exchange"].append(spec.exchange)
-                        columns["frequency"].append("Monthly")
-                        columns["reference"].append(reference)
-                        columns["month"].append(month_label)
-                        columns["contract_month_yr"].append(month_yr)
-                        columns["contract_year"].append(contract_year)
-                        columns["PX_LAST"].append(float(round(last, 5)))
-                        columns["PX_CLOSE"].append(float(round(close, 5)))
-                        columns["PX_SETTLE"].append(float(round(settle, 5)))
-                        columns["PX_FAIR_1430"].append(float(round(fair_1430, 5)))
-                        columns["PX_VOLUME"].append(volume)
-                        columns["year"].append(current_date.year)
-                        columns["bbl_per_mt"].append(spec.bbl_per_mt)
-                        columns["gal_per_bbl"].append(42)
+                    columns["date"].append(current_date)
+                    columns["security_str"].append(ticker)
+                    columns["FUT_CUR_GEN_TICKER"].append(ticker)
+                    columns["security_prefix"].append(root)
+                    columns["CLEAN_NAME"].append(spec.clean_name)
+                    columns["exchange"].append(spec.exchange)
+                    columns["frequency"].append("Monthly")
+                    columns["reference"].append(reference)
+                    columns["month"].append(month_label)
+                    columns["contract_month_yr"].append(month_yr)
+                    columns["contract_year"].append(contract_year)
+                    columns["PX_LAST"].append(float(round(last, 5)))
+                    columns["PX_CLOSE"].append(float(round(close, 5)))
+                    columns["PX_SETTLE"].append(float(round(settle, 5)))
+                    columns["PX_FAIR_1430"].append(float(round(fair_1430, 5)))
+                    columns["PX_VOLUME"].append(volume)
+                    columns["year"].append(current_date.year)
+                    columns["bbl_per_mt"].append(spec.bbl_per_mt)
+                    columns["gal_per_bbl"].append(42)
 
     # RVO is an undated daily index, not a futures strip. Keep one observation
     # per date in the source; browser JavaScript aligns that same daily value to
@@ -305,9 +349,9 @@ def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int
         last = max(0.01, close + rvo_rng.normal(0, 0.04))
         fair_1430 = max(0.01, settle + rvo_rng.normal(0, 0.04))
         columns["date"].append(current_date)
-        columns["security_str"].append("RVO Index")
-        columns["FUT_CUR_GEN_TICKER"].append("RVO Index")
-        columns["security_prefix"].append("RVO")
+        columns["security_str"].append("NAUG008A Index")
+        columns["FUT_CUR_GEN_TICKER"].append("NAUG008A Index")
+        columns["security_prefix"].append("NAUG008A")
         columns["CLEAN_NAME"].append("RVO")
         columns["exchange"].append("Bloomberg")
         columns["frequency"].append("Flat")
@@ -358,8 +402,10 @@ def generate_dataset(start_contract_year: int, end_contract_year: int, seed: int
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate deterministic NYMEX/ICE mock Bloomberg pricing data.")
-    parser.add_argument("--start-contract-year", type=int, default=2020, help="First contract year to generate.")
+    parser.add_argument("--start-contract-year", type=int, default=2018, help="First contract year to generate.")
     parser.add_argument("--end-contract-year", type=int, default=2028, help="Last contract year to generate.")
+    parser.add_argument("--history-start", default="2015-01-01", help="Earliest retained observation date (YYYY-MM-DD).")
+    parser.add_argument("--history-months", type=int, default=36, help="Months retained before each delivery month.")
     parser.add_argument("--seed", type=int, default=20260215, help="Random seed for deterministic output.")
     parser.add_argument(
         "--csv-output",
@@ -373,7 +419,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    df = generate_dataset(args.start_contract_year, args.end_contract_year, args.seed)
+    df = generate_dataset(
+        args.start_contract_year,
+        args.end_contract_year,
+        args.seed,
+        history_start=date.fromisoformat(args.history_start),
+        history_months=args.history_months,
+    )
     parquet_path = Path(args.parquet_output)
     parquet_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -386,6 +438,7 @@ def main() -> int:
     print(f"rows={df.height} columns={len(df.columns)}")
     print(f"contract_year_range={int(df['contract_year'].min())}-{int(df['contract_year'].max())}")
     print(f"date_range={df['date'].min()}->{df['date'].max()}")
+    print(f"history_months={args.history_months}")
     print(f"roots={','.join(sorted(df['security_prefix'].unique().to_list()))}")
     print(f"wrote_parquet={parquet_path}")
     if args.csv_output:

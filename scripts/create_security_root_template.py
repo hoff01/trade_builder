@@ -28,8 +28,8 @@ from app.root_config import (
 DEFAULT_ROWS = (
     (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:WU", "ME|GC JET", "Refined Products", 10),
     (True, "HO", "Heating Oil", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:HO", "ULSD|HEATING OIL", "Refined Products", 20),
-    (True, "RB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:RB", "RBOB", "Refined Products", 30),
-    (True, "RVO", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 35),
+    (True, "XB", "RBOB Gasoline", "Comdty", "cpg", 8.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:RB", "RB|RBOB", "Refined Products", 30),
+    (True, "NAUG008A", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RVO|RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 35),
     (True, "QS", "ICE Low Sulphur Gasoil", "Comdty", "$/MT", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "ICEEUR:QS1!", "GASOIL|LSGO", "Refined Products", 40),
     (True, "CL", "WTI Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:CL", "WTI", "Crude", 50),
     (True, "CO", "Brent Crude Oil", "Comdty", "$/bbl", 7.33, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "TVC:UKOIL", "BRENT", "Crude", 60),
@@ -48,8 +48,8 @@ def build_workbook(path: Path) -> None:
     instructions.append(["4", "Review the Bloomberg Update sheet to control dates, full data fields, lightweight dashboard fields, and connection settings."])
     instructions.append(["5", "Save the workbook, start the local dashboard, and press UPDATE DATA."])
     instructions.append(["Ticker example", "HO + Feb (G) + {y} + Comdty produces HOG6 Comdty for 2026."])
-    instructions.append(["Flat example", "RVO uses Flat with {root} {yellow_key}; Bloomberg pulls RVO Index once and the dashboard applies each daily value across the full curve."])
-    instructions.append(["Year placeholders", "Use {y} for 6, {yy} for 26, or {year} for 2026. yellow_key independently controls Comdty vs Index."])
+    instructions.append(["Flat example", "RVO uses root NAUG008A with Flat and Index; Bloomberg pulls NAUG008A Index once and the dashboard applies each daily value across the full curve."])
+    instructions.append(["Year placeholders", "Use {y} for 6, {yy} for 26, or {year} for 2026. If {y} collides across decades, every colliding year automatically expands (for example WUG18 and WUG28). yellow_key independently controls Comdty vs Index."])
     instructions.append([])
     instructions.append(["Conversion checks"])
     instructions.append(["cpg → $/gal", "divide by 100"])
@@ -121,7 +121,7 @@ def build_workbook(path: Path) -> None:
         ("contract_start_year", update_defaults.contract_start_year, "First delivery year included in the ticker universe."),
         ("contract_end_year", update_defaults.contract_end_year, "Last delivery year included in the ticker universe."),
         ("contract_history_months", update_defaults.contract_history_months, "Months of history requested before each delivery month."),
-        ("reference_depth", update_defaults.reference_depth, "Maximum dated-contract reference retained, normally 1 or 2."),
+        ("reference_depth", update_defaults.reference_depth, "Maximum dated-contract reference retained; use 3 with 36-month history."),
         ("overlap_days", update_defaults.overlap_days, "Days re-pulled for active contracts during an incremental update."),
         ("fields", ",".join(update_defaults.fields), "Bloomberg fields retained in the full CSV and Parquet; PX_LAST is required."),
         ("dashboard_fields", ",".join(update_defaults.dashboard_fields), "Subset embedded in the portable dashboard; every value must also appear in fields."),

@@ -28,7 +28,7 @@ const UNIT_FACTORS_BY_CODE = {
 
 const DEFAULT_TRADINGVIEW_SYMBOLS = {
     CL: 'NYMEX:CL',
-    RB: 'NYMEX:RB',
+    XB: 'NYMEX:RB',
     HO: 'NYMEX:HO',
     NG: 'NYMEX:NG',
     ME: 'NYMEX:ME',
@@ -220,7 +220,7 @@ const PREBUILT_SPREADS = [
         label: '2*RBOB + 1*HO - 3*Brent (Month+1)',
         formula: '2*RBOB + 1*HO - 3*Brent (Month+1)',
         legs: [
-            { code: 'RB', ratio: 2, monthOffset: 0 },
+            { code: 'XB', ratio: 2, monthOffset: 0 },
             { code: 'HO', ratio: 1, monthOffset: 0 },
             { code: 'BRENT', ratio: -3, monthOffset: 1 }
         ]
@@ -230,7 +230,7 @@ const PREBUILT_SPREADS = [
         label: 'USGC 3-2-1 Crack',
         formula: '2*RBOB + 1*HO - 3*Crude',
         legs: [
-            { code: 'RB', ratio: 2, monthOffset: 0 },
+            { code: 'XB', ratio: 2, monthOffset: 0 },
             { code: 'HO', ratio: 1, monthOffset: 0 },
             { code: 'CL', ratio: -3, monthOffset: 0 }
         ]
@@ -2224,7 +2224,7 @@ function resolvePrebuiltCode(code) {
         return canonicalizeRootCode(byCode.security || byCode.root_code || byCode.code);
     }
     const nameMap = {
-        RB: ['RBOB'],
+        XB: ['RBOB'],
         HO: ['Heating Oil'],
         CL: ['Crude'],
         WU: ['GC Jet', 'GC Jet Basis'],

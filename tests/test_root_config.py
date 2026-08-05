@@ -24,14 +24,20 @@ class RootConfigTests(unittest.TestCase):
         self.assertEqual(metadata["WU"]["native_unit"], "cpg")
         self.assertEqual(metadata["HO"]["native_unit"], "cpg")
         self.assertEqual(metadata["QS"]["native_unit"], "$/MT")
-        self.assertEqual(metadata["RVO"]["curve_mode"], "flat")
-        self.assertEqual(metadata["RVO"]["ticker_template"], "{root} {yellow_key}")
-        self.assertEqual(metadata["RVO"]["yellow_key"], "Index")
+        self.assertEqual(metadata["NAUG008A"]["curve_mode"], "flat")
+        self.assertEqual(metadata["NAUG008A"]["ticker_template"], "{root} {yellow_key}")
+        self.assertEqual(metadata["NAUG008A"]["yellow_key"], "Index")
+        self.assertEqual(metadata["XB"]["common_name"], "RBOB Gasoline")
+        self.assertEqual(config.resolve_root("RB"), "XB")
+        self.assertEqual(config.resolve_root("RVO"), "NAUG008A")
         self.assertEqual(config.resolve_root("ME"), "WU")
         self.assertEqual(config.update.host, "localhost")
         self.assertEqual(config.update.port, 8194)
-        self.assertEqual(config.update.contract_start_year, 2020)
+        self.assertEqual(config.update.history_start.isoformat(), "2015-01-01")
+        self.assertEqual(config.update.contract_start_year, 2018)
         self.assertEqual(config.update.contract_end_year, 2028)
+        self.assertEqual(config.update.contract_history_months, 36)
+        self.assertEqual(config.update.reference_depth, 3)
         self.assertIn("PX_LAST", config.update.fields)
         self.assertEqual(config.update.dashboard_fields, ("PX_LAST",))
 
@@ -56,6 +62,10 @@ class RootConfigTests(unittest.TestCase):
                 if row[0].value
             }
             self.assertEqual(update_settings["dashboard_fields"], "PX_LAST")
+            self.assertEqual(update_settings["history_start"], "2015-01-01")
+            self.assertEqual(update_settings["contract_start_year"], 2018)
+            self.assertEqual(update_settings["contract_history_months"], 36)
+            self.assertEqual(update_settings["reference_depth"], 3)
         finally:
             workbook.close()
 

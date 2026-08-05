@@ -27,7 +27,7 @@ INSTALL_BLOOMBERG.bat
 UPDATE_AND_OPEN.bat
 ```
 
-`INSTALL_BLOOMBERG.bat` prefers 64-bit Python 3.13 and falls back to 3.12. It creates the reusable environment at `%USERPROFILE%\Pyenvs\trade_builder`, installs the full Polars/dashboard stack from PyPI, downloads `blpapi` only from Bloomberg's official package index, and runs native import checks. `UPDATE_AND_OPEN.bat` runs the same self-healing bootstrap automatically before opening the dashboard. It invokes the managed environment's Python directly, so it never falls back to an unconfigured system Python.
+`INSTALL_BLOOMBERG.bat` prefers 64-bit Python 3.13 and falls back to 3.12. It creates the reusable environment at `%USERPROFILE%\Pyenvs\trade_builder`, installs the full Polars/dashboard stack from PyPI, downloads `blpapi` only from Bloomberg's official package index, runs native import checks, and builds missing or stale embedded sample data before the server starts. `UPDATE_AND_OPEN.bat` runs the same self-healing bootstrap automatically before opening the dashboard. It invokes the managed environment's Python directly, so it never falls back to an unconfigured system Python.
 
 For a manual install, use the same interpreter for every command:
 
@@ -115,7 +115,7 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 | Field | Purpose | Example |
 |---|---|---|
 | `enabled` | Include the root in Bloomberg and the export | `TRUE` |
-| `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO`, `RVO` |
+| `root` | Exact Bloomberg root, normalized to uppercase | `WU`, `HO`, `XB`, `NAUG008A` |
 | `common_name` | Authoritative label used everywhere in the dashboard and exports | `GC Jet`, `Heating Oil` |
 | `yellow_key` | Bloomberg security type | `Comdty` or `Index` |
 | `native_unit` | Native Bloomberg quote unit | `cpg`, `$/gal`, `$/bbl`, `$/MT` |
@@ -128,7 +128,7 @@ Open [`config/security_roots.xlsx`](config/security_roots.xlsx) and edit the **S
 | `product_group` | Sidebar grouping | `Refined Products` |
 | `sort_order` | Display order | `10` |
 
-The workbook already includes `WU` for GC Jet, `HO` for Heating Oil, and `RVO` as the monthless `RVO Index`. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key, unit, and curve mode fields use dropdowns. Existing files that still use `display_name` or have no `curve_mode` column remain supported; missing curve modes default to `Monthly`. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
+The workbook already includes `WU` for GC Jet, `HO` for Heating Oil, `XB` for RBOB Gasoline, and `NAUG008A` as the monthless `NAUG008A Index` used by the common name RVO. Change `common_name` once and that label is mapped into the canonical CSV, Parquet, standalone export, sidebar, selectors, and chart metadata. Yellow key, unit, and curve mode fields use dropdowns. Existing files that still use `display_name` or have no `curve_mode` column remain supported; missing curve modes default to `Monthly`. A review-friendly root mirror is available at [`config/security_roots.example.csv`](config/security_roots.example.csv).
 
 For `curve_mode=Flat`, the updater requests only the configured undated Bloomberg ticker. The trade leg has no month selector. JavaScript uses that date's observation unchanged for every point on the selected forward curve, so RVO does not acquire an artificial monthly shape.
 
@@ -145,15 +145,17 @@ The **Bloomberg Update** sheet controls:
 - batch size and per-request timeout;
 - maximum standalone HTML size.
 
+The committed defaults start delivery years at 2018, retain observations from January 1, 2015, request 36 months of history before each delivery month, and retain references 1 through 3 so the third year is not discarded after Bloomberg returns it.
+
 The year placeholder and yellow key are independent:
 
 - `{root}{month_code}{y} {yellow_key}` generates `HOG6 Comdty` for February 2026 Heating Oil.
 - Replace `{y}` with `{yy}` to generate `HOG26 Comdty`.
 - Replace `{y}` with `{year}` to generate `HOG2026 Comdty`.
 - Change `yellow_key` from `Comdty` to `Index` to make the same ticker end in `Index`.
-- `{root} {yellow_key}` with `curve_mode=Flat` generates one `RVO Index` request with no month or year suffix.
+- `{root} {yellow_key}` with `curve_mode=Flat` generates one `NAUG008A Index` request with no month or year suffix.
 
-The standard workbook uses Bloomberg-style one-digit years. Each root can use its own template and yellow key.
+The standard workbook uses Bloomberg-style one-digit years. If two configured delivery years would generate the same ticker, every member of that collision group automatically expands by one year digit, so February 2018 and February 2028 become `WUG18 Comdty` and `WUG28 Comdty`; non-colliding years remain abbreviated. Each root can use its own template and yellow key.
 
 ## Unit conversion contract
 
@@ -177,10 +179,11 @@ The same path is reversed for target-unit conversion. Spreadsheet formula string
 - The local owner server revalidates cached static assets while keeping update API responses uncached.
 - `built_at` and `data_max_date` remain separate, so rebuilding cannot make stale prices appear current.
 - The default 20 MB standalone-file budget fails visibly if a data expansion becomes too large.
+- Optional Bloomberg price fields are cast back to nullable numeric columns during export, so an entirely blank field cannot create a false CSV/Parquet parity failure.
 
 ## Build without Bloomberg
 
-The committed sample is deterministic and exercises CL, CO, HO, RB, QS, WU, and the monthless RVO flat curve in their native units.
+The committed sample is deterministic and exercises CL, CO, HO, XB, QS, WU, and the monthless `NAUG008A Index` RVO flat curve in their native units.
 
 ```bash
 python3 -m venv .venv

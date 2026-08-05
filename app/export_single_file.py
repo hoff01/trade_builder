@@ -1318,6 +1318,16 @@ def export_dashboard(
         "PX_SETTLE": overrides.get("px_settle") or _pick_column(df.columns, PX_SETTLE_CANDIDATES),
         "PX_FAIR_1430": overrides.get("px_fair") or _pick_column(df.columns, PX_FAIR_CANDIDATES),
     }
+    numeric_price_columns = sorted(
+        {column for column in source_field_columns.values() if column}
+    )
+    if numeric_price_columns:
+        df = df.with_columns(
+            [
+                pl.col(column).cast(pl.Float64, strict=False).alias(column)
+                for column in numeric_price_columns
+            ]
+        )
     if selected_fields is None:
         selected_fields = [field for field in SUPPORTED_PRICE_FIELDS if source_field_columns.get(field)]
     else:

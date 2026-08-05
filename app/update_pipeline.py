@@ -209,35 +209,55 @@ def _ticker_for(
     return " ".join(ticker.split())
 
 
-def _unique_ticker_for(
+def _monthly_tickers_for_year_range(
     root: SecurityRoot,
-    month_code: str,
-    contract_year: int,
-    seen: set[str],
-) -> str:
-    """Render a ticker, expanding abbreviated year tokens only on collision."""
+    contract_years: Sequence[int],
+) -> dict[tuple[int, str], str]:
+    """Render all monthly tickers, expanding every member of a collision group."""
 
+    keys = [
+        (contract_year, month_code)
+        for contract_year in contract_years
+        for month_code, _month_label in MONTH_CODES.values()
+    ]
     abbreviated_widths = [
         width
         for token, width in ABBREVIATED_YEAR_TOKEN_WIDTHS.items()
         if token in root.ticker_template
     ]
-    minimum_width = min(abbreviated_widths, default=len(str(contract_year)))
-    max_extra_digits = max(0, len(str(contract_year)) - minimum_width)
-    first_ticker = ""
+    minimum_width = min(abbreviated_widths, default=4)
+    max_extra_digits = max(0, 4 - minimum_width)
+    extra_digits = {key: 0 for key in keys}
 
-    for extra_year_digits in range(max_extra_digits + 1):
-        ticker = _ticker_for(
-            root,
-            month_code,
-            contract_year,
-            extra_year_digits=extra_year_digits,
-        )
-        first_ticker = first_ticker or ticker
-        if ticker.casefold() not in seen:
-            return ticker
+    while True:
+        tickers = {
+            key: _ticker_for(
+                root,
+                key[1],
+                key[0],
+                extra_year_digits=extra_digits[key],
+            )
+            for key in keys
+        }
+        by_ticker: dict[str, list[tuple[int, str]]] = {}
+        for key, ticker in tickers.items():
+            by_ticker.setdefault(ticker.casefold(), []).append(key)
+        collisions = [group for group in by_ticker.values() if len(group) > 1]
+        if not collisions:
+            return tickers
 
-    raise UpdateError(f"Ticker template generated a duplicate security: {first_ticker}")
+        progressed = False
+        for group in collisions:
+            for key in group:
+                if extra_digits[key] < max_extra_digits:
+                    extra_digits[key] += 1
+                    progressed = True
+        if not progressed:
+            first_key = collisions[0][0]
+            raise UpdateError(
+                "Ticker template generated a duplicate security: "
+                + tickers[first_key]
+            )
 
 
 def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tuple[ContractSpec, ...]:
@@ -274,7 +294,11 @@ def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tu
                 )
             )
             continue
-        for contract_year in range(settings.contract_start_year, settings.contract_end_year + 1):
+        contract_years = tuple(
+            range(settings.contract_start_year, settings.contract_end_year + 1)
+        )
+        tickers = _monthly_tickers_for_year_range(root, contract_years)
+        for contract_year in contract_years:
             for month_number, (month_code, month_label) in MONTH_CODES.items():
                 delivery_start = date(contract_year, month_number, 1)
                 start_date = max(
@@ -282,8 +306,12 @@ def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tu
                     _subtract_months(delivery_start, settings.contract_history_months),
                 )
                 end_date = min(current_date, delivery_start - timedelta(days=1))
-                ticker = _unique_ticker_for(root, month_code, contract_year, seen)
+                ticker = tickers[(contract_year, month_code)]
                 normalized = ticker.casefold()
+                if normalized in seen:
+                    raise UpdateError(
+                        f"Ticker template generated a duplicate security: {ticker}"
+                    )
                 seen.add(normalized)
                 specs.append(
                     ContractSpec(
@@ -791,16 +819,25 @@ def _root_stats(frame: pl.DataFrame) -> dict[str, dict[str, object]]:
 
 
 def _verify_parquet_parity(
-    frame: pl.DataFrame, parquet_path: Path, fields: Sequence[str]
+    csv_path: Path, parquet_path: Path, fields: Sequence[str]
 ) -> None:
+    csv_frame = pl.read_csv(csv_path, try_parse_dates=True, infer_schema_length=10_000)
     parquet = pl.read_parquet(parquet_path)
-    compare_columns = ["date", "security_str", "reference", *fields]
-    if parquet.height != frame.height:
+    if parquet.height != csv_frame.height:
         raise UpdateError(
-            f"CSV/Parquet row-count mismatch: {frame.height} CSV rows vs {parquet.height} Parquet rows."
+            f"CSV/Parquet row-count mismatch: {csv_frame.height} CSV rows vs {parquet.height} Parquet rows."
         )
-    left = frame.select(compare_columns).sort(["date", "security_str", "reference"])
-    right = parquet.select(compare_columns).sort(["date", "security_str", "reference"])
+    projection = [
+        pl.col("date").cast(pl.Date).alias("date"),
+        pl.col("security_str").cast(pl.Utf8).alias("security_str"),
+        pl.col("reference").cast(pl.Int64).alias("reference"),
+        *[
+            pl.col(field).cast(pl.Float64, strict=False).round(PRECISION).alias(field)
+            for field in fields
+        ],
+    ]
+    left = csv_frame.select(projection).sort(["date", "security_str", "reference"])
+    right = parquet.select(projection).sort(["date", "security_str", "reference"])
     if not left.equals(right, null_equal=True):
         raise UpdateError("CSV and compact Parquet keys/prices are not identical.")
 
@@ -929,7 +966,7 @@ def run_bloomberg_update(
             ),
             built_at=completed_at.isoformat().replace("+00:00", "Z"),
         )
-        _verify_parquet_parity(combined, staged_parquet, price_fields)
+        _verify_parquet_parity(staged_csv, staged_parquet, price_fields)
         _write_csv_gzip(staged_csv, staged_csv_gzip)
 
         artifact_pairs = (

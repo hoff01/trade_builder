@@ -27,7 +27,7 @@ from scripts.validate_pricing_data import count_values_over_precision
 ROOT_ROWS = (
     (True, "WU", "GC Jet", "Comdty", "cpg", 7.45, 42, "{root}{month_code}{yy} {yellow_key}", "Monthly", "NYMEX:WU", "ME", "Refined", 1),
     (True, "HO", "Heating Oil", "Index", "$/gal", 7.45, 42, "{root}{month_code}{y} {yellow_key}", "Monthly", "NYMEX:HO", "", "Refined", 2),
-    (True, "RVO", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 3),
+    (True, "NAUG008A", "RVO", "Index", "cpg", 7.45, 42, "{root} {yellow_key}", "Flat", "", "RVO|RENEWABLE VOLUME OBLIGATION", "Renewable Fuels", 3),
 )
 
 
@@ -37,12 +37,15 @@ def write_config(
     max_mb: float = 20.0,
     contract_start_year: int = 2026,
     contract_end_year: int = 2026,
+    wu_ticker_template: str = "{root}{month_code}{yy} {yellow_key}",
 ) -> None:
     workbook = Workbook()
     roots = workbook.active
     roots.title = "Security Roots"
     roots.append(ROOT_COLUMNS)
     for row in ROOT_ROWS:
+        if row[1] == "WU":
+            row = (*row[:7], wu_ticker_template, *row[8:])
         roots.append(row)
     update = workbook.create_sheet(UPDATE_SHEET_NAME)
     update.append(("setting", "value", "description"))
@@ -72,6 +75,7 @@ def write_config(
 class FakeClient:
     calls: list[tuple]
     price: float = 200.123456789
+    null_optional_fields: bool = False
 
     def fetch(self, requests, fields, *, batch_size, timeout_seconds):
         self.calls.append((tuple(requests), tuple(fields), batch_size, timeout_seconds))
@@ -83,9 +87,9 @@ class FakeClient:
                     "security": request.security,
                     "date": request.end_date,
                     "PX_LAST": value,
-                    "PX_CLOSE": value - 0.1111111,
-                    "PX_SETTLE": value + 0.2222222,
-                    "PX_FAIR_1430": value - 0.3333333,
+                    "PX_CLOSE": None if self.null_optional_fields else value - 0.1111111,
+                    "PX_SETTLE": None if self.null_optional_fields else value + 0.2222222,
+                    "PX_FAIR_1430": None if self.null_optional_fields else value - 0.3333333,
                 }
             )
         return BloombergPullResult(tuple(rows), ())
@@ -111,33 +115,44 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertIn("HOF6 Index", tickers)
         self.assertIn("HOG6 Index", tickers)
         self.assertIn("HOZ6 Index", tickers)
-        self.assertIn("RVO Index", tickers)
-        self.assertEqual(sum(ticker == "RVO Index" for ticker in tickers), 1)
+        self.assertIn("NAUG008A Index", tickers)
+        self.assertEqual(sum(ticker == "NAUG008A Index" for ticker in tickers), 1)
 
     def test_default_workbook_generates_hog6_comdty(self) -> None:
         config = load_root_config("config/security_roots.xlsx")
         specs = build_contract_universe(config, date(2026, 8, 3))
         tickers = {spec.ticker for spec in specs}
         self.assertIn("HOG6 Comdty", tickers)
-        self.assertIn("RVO Index", tickers)
+        self.assertIn("XBG6 Comdty", tickers)
+        self.assertIn("WUG18 Comdty", tickers)
+        self.assertIn("WUG28 Comdty", tickers)
+        self.assertIn("NAUG008A Index", tickers)
+        first_wu_contract = next(
+            spec
+            for spec in specs
+            if spec.root == "WU" and spec.contract_year == 2018 and spec.month_code == "F"
+        )
+        self.assertEqual(first_wu_contract.start_date, date(2015, 1, 1))
+        self.assertEqual(first_wu_contract.end_date, date(2017, 12, 31))
 
     def test_one_digit_year_expands_only_when_a_decade_collides(self) -> None:
         write_config(
             self.config_path,
-            contract_start_year=2000,
+            contract_start_year=2018,
             contract_end_year=2028,
+            wu_ticker_template="{root}{month_code}{y} {yellow_key}",
         )
         config = load_root_config(self.config_path)
         specs = build_contract_universe(config, date(2026, 8, 3))
 
-        ho_january = {
+        wu_february = {
             spec.contract_year: spec.ticker
             for spec in specs
-            if spec.root == "HO" and spec.month_code == "F"
+            if spec.root == "WU" and spec.month_code == "G"
         }
-        self.assertEqual(ho_january[2008], "HOF8 Index")
-        self.assertEqual(ho_january[2018], "HOF18 Index")
-        self.assertEqual(ho_january[2028], "HOF28 Index")
+        self.assertEqual(wu_february[2018], "WUG18 Comdty")
+        self.assertEqual(wu_february[2019], "WUG9 Comdty")
+        self.assertEqual(wu_february[2028], "WUG28 Comdty")
         self.assertEqual(
             len({spec.ticker.casefold() for spec in specs}),
             len(specs),
@@ -148,11 +163,11 @@ class UpdatePipelineTests(unittest.TestCase):
         specs = [
             spec
             for spec in build_contract_universe(config, date(2026, 8, 3))
-            if spec.root == "RVO"
+            if spec.root == "NAUG008A"
         ]
         self.assertEqual(len(specs), 1)
         spec = specs[0]
-        self.assertEqual(spec.ticker, "RVO Index")
+        self.assertEqual(spec.ticker, "NAUG008A Index")
         self.assertEqual(spec.curve_mode, "flat")
         self.assertEqual(spec.month_label, "")
         self.assertIsNone(spec.contract_year)
@@ -161,8 +176,8 @@ class UpdatePipelineTests(unittest.TestCase):
 
         frame, warnings = normalize_bloomberg_rows(
             (
-                {"security": "RVO Index", "date": date(2026, 8, 1), "PX_LAST": 18.1234567, "PX_CLOSE": 18.0, "PX_SETTLE": 18.1, "PX_FAIR_1430": 18.2},
-                {"security": "RVO Index", "date": date(2026, 8, 2), "PX_LAST": 19.1234567, "PX_CLOSE": 19.0, "PX_SETTLE": 19.1, "PX_FAIR_1430": 19.2},
+                {"security": "NAUG008A Index", "date": date(2026, 8, 1), "PX_LAST": 18.1234567, "PX_CLOSE": 18.0, "PX_SETTLE": 18.1, "PX_FAIR_1430": 18.2},
+                {"security": "NAUG008A Index", "date": date(2026, 8, 2), "PX_LAST": 19.1234567, "PX_CLOSE": 19.0, "PX_SETTLE": 19.1, "PX_FAIR_1430": 19.2},
             ),
             (spec,),
             config.update.fields,
@@ -255,41 +270,41 @@ class UpdatePipelineTests(unittest.TestCase):
         validate_canonical_frame(frame, config, specs, date(2026, 8, 3))
 
         malformed = frame.with_columns(
-            pl.when(pl.col("security_prefix") == "RVO")
+            pl.when(pl.col("security_prefix") == "NAUG008A")
             .then(pl.lit("Monthly"))
             .otherwise(pl.col("frequency"))
             .alias("frequency"),
-            pl.when(pl.col("security_prefix") == "RVO")
+            pl.when(pl.col("security_prefix") == "NAUG008A")
             .then(pl.lit("Jan"))
             .otherwise(pl.col("month"))
             .alias("month"),
-            pl.when(pl.col("security_prefix") == "RVO")
+            pl.when(pl.col("security_prefix") == "NAUG008A")
             .then(pl.lit("F26"))
             .otherwise(pl.col("contract_month_yr"))
             .alias("contract_month_yr"),
-            pl.when(pl.col("security_prefix") == "RVO")
+            pl.when(pl.col("security_prefix") == "NAUG008A")
             .then(pl.lit(2026))
             .otherwise(pl.col("contract_year"))
             .alias("contract_year"),
-            pl.when(pl.col("security_prefix") == "RVO")
+            pl.when(pl.col("security_prefix") == "NAUG008A")
             .then(pl.lit(2))
             .otherwise(pl.col("reference"))
             .alias("reference"),
         )
-        extra_flat_security = malformed.filter(pl.col("security_prefix") == "RVO").head(1).with_columns(
-            pl.lit("RVOALT Index").alias("security_str")
+        extra_flat_security = malformed.filter(pl.col("security_prefix") == "NAUG008A").head(1).with_columns(
+            pl.lit("NAUG008AALT Index").alias("security_str")
         )
         malformed = pl.concat([malformed, extra_flat_security], how="vertical_relaxed")
 
         with self.assertRaises(UpdateError) as context:
             validate_canonical_frame(malformed, config, specs, date(2026, 8, 3))
         message = str(context.exception)
-        self.assertIn("RVO flat curve must contain exactly one non-null security", message)
-        self.assertIn("RVO flat rows must use frequency Flat", message)
-        self.assertIn("RVO flat rows must have a blank month", message)
-        self.assertIn("RVO flat rows must have a blank contract_month_yr", message)
-        self.assertIn("RVO flat rows must have a null contract_year", message)
-        self.assertIn("RVO flat rows must use reference 1", message)
+        self.assertIn("NAUG008A flat curve must contain exactly one non-null security", message)
+        self.assertIn("NAUG008A flat rows must use frequency Flat", message)
+        self.assertIn("NAUG008A flat rows must have a blank month", message)
+        self.assertIn("NAUG008A flat rows must have a blank contract_month_yr", message)
+        self.assertIn("NAUG008A flat rows must have a null contract_year", message)
+        self.assertIn("NAUG008A flat rows must use reference 1", message)
 
     def test_fake_update_writes_csv_gzip_parquet_html_and_manifest(self) -> None:
         client = FakeClient([], price=10000.12345)
@@ -311,7 +326,7 @@ class UpdatePipelineTests(unittest.TestCase):
         csv_frame = pl.read_csv(self.paths.csv, try_parse_dates=True)
         parquet_frame = pl.read_parquet(self.paths.parquet)
         self.assertEqual(csv_frame.height, parquet_frame.height)
-        self.assertEqual(set(csv_frame["security_prefix"]), {"WU", "HO", "RVO"})
+        self.assertEqual(set(csv_frame["security_prefix"]), {"WU", "HO", "NAUG008A"})
         self.assertEqual(set(csv_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil", "RVO"})
         self.assertEqual(set(parquet_frame["CLEAN_NAME"]), {"GC Jet", "Heating Oil", "RVO"})
         self.assertTrue(
@@ -332,7 +347,7 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertEqual(manifest["status"], "complete")
         self.assertEqual(manifest["source"], "Bloomberg Desktop API")
         self.assertEqual(manifest["retained_rows"], csv_frame.height)
-        self.assertEqual(set(manifest["root_coverage"]), {"WU", "HO", "RVO"})
+        self.assertEqual(set(manifest["root_coverage"]), {"WU", "HO", "NAUG008A"})
         self.assertEqual(
             manifest["requested_fields"],
             ["PX_LAST", "PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"],
@@ -340,7 +355,7 @@ class UpdatePipelineTests(unittest.TestCase):
         self.assertEqual(manifest["dashboard_fields"], ["PX_LAST"])
         self.assertEqual(
             manifest["curve_modes"],
-            {"HO": "monthly", "RVO": "flat", "WU": "monthly"},
+            {"HO": "monthly", "NAUG008A": "flat", "WU": "monthly"},
         )
         self.assertEqual(manifest["export"]["fields"], ["PX_LAST"])
         self.assertEqual(
@@ -372,11 +387,24 @@ class UpdatePipelineTests(unittest.TestCase):
             all(
                 (ticker.startswith("WU") and ticker.endswith("26 Comdty"))
                 or (ticker.startswith("HO") and ticker.endswith("6 Index"))
-                or ticker == "RVO Index"
+                or ticker == "NAUG008A Index"
                 for ticker in requested
             )
         )
         self.assertGreater(float(after["PX_LAST"].max()), 300.0)
+
+    def test_all_null_optional_prices_remain_numeric_and_pass_csv_parquet_parity(self) -> None:
+        summary = run_bloomberg_update(
+            paths=self.paths,
+            client=FakeClient([], null_optional_fields=True),
+            as_of=date(2026, 8, 3),
+            full=True,
+        )
+        self.assertTrue(summary["ok"])
+        parquet = pl.read_parquet(self.paths.parquet)
+        for field in ("PX_CLOSE", "PX_SETTLE", "PX_FAIR_1430"):
+            self.assertEqual(parquet.schema[field], pl.Float64)
+            self.assertEqual(parquet[field].null_count(), parquet.height)
 
     def test_late_export_failure_preserves_every_previous_artifact(self) -> None:
         sentinel = b"previous-good-artifact"

@@ -10,6 +10,10 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $RequirementsPath = Join-Path $RepoRoot "requirements.txt"
 $BloombergRequirementsPath = Join-Path $RepoRoot "requirements-bloomberg.txt"
 $RuntimeCheckPath = Join-Path $PSScriptRoot "check_runtime_compatibility.py"
+$BuildDashboardPath = Join-Path $PSScriptRoot "build_dashboard.py"
+$EmbeddedDataPath = Join-Path $RepoRoot "app\static\embedded_data.js"
+$SampleDataPath = Join-Path $RepoRoot "data\sample_market_data.parquet"
+$RootConfigPath = Join-Path $RepoRoot "config\security_roots.xlsx"
 $BloombergIndexUrl = "https://blpapi.bloomberg.com/repository/releases/python/simple/"
 if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
     throw "USERPROFILE is not set; the managed Trade Builder environment cannot be located."
@@ -176,7 +180,35 @@ function Install-ManagedDependencies {
     }
 }
 
-foreach ($RequiredPath in @($RequirementsPath, $BloombergRequirementsPath, $RuntimeCheckPath)) {
+function Ensure-EmbeddedDashboardData {
+    $NeedsBuild = -not (Test-Path -LiteralPath $EmbeddedDataPath)
+    if (-not $NeedsBuild) {
+        $EmbeddedTimestamp = (Get-Item -LiteralPath $EmbeddedDataPath).LastWriteTimeUtc
+        foreach ($SourcePath in @($SampleDataPath, $RootConfigPath)) {
+            if ((Get-Item -LiteralPath $SourcePath).LastWriteTimeUtc -gt $EmbeddedTimestamp) {
+                $NeedsBuild = $true
+                break
+            }
+        }
+    }
+    if (-not $NeedsBuild) {
+        return
+    }
+
+    Write-Host "Building the initial embedded dashboard data..."
+    Push-Location $RepoRoot
+    try {
+        & $VenvPython $BuildDashboardPath
+        $BuildExitCode = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    if ($BuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $EmbeddedDataPath)) {
+        throw "Initial dashboard data build failed."
+    }
+}
+
+foreach ($RequiredPath in @($RequirementsPath, $BloombergRequirementsPath, $RuntimeCheckPath, $BuildDashboardPath, $SampleDataPath, $RootConfigPath)) {
     if (-not (Test-Path -LiteralPath $RequiredPath)) {
         throw "Required setup file was not found: $RequiredPath"
     }
@@ -224,6 +256,8 @@ Write-Host "Trade Builder environment ready: $VenvPath"
 if ($LASTEXITCODE -ne 0) {
     throw "Managed runtime validation failed."
 }
+
+Ensure-EmbeddedDashboardData
 
 if ($InstallOnly) {
     exit 0
