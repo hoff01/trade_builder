@@ -31,7 +31,13 @@ ROOT_ROWS = (
 )
 
 
-def write_config(path: Path, *, max_mb: float = 20.0) -> None:
+def write_config(
+    path: Path,
+    *,
+    max_mb: float = 20.0,
+    contract_start_year: int = 2026,
+    contract_end_year: int = 2026,
+) -> None:
     workbook = Workbook()
     roots = workbook.active
     roots.title = "Security Roots"
@@ -42,8 +48,8 @@ def write_config(path: Path, *, max_mb: float = 20.0) -> None:
     update.append(("setting", "value", "description"))
     settings = (
         ("history_start", "2024-01-01"),
-        ("contract_start_year", 2026),
-        ("contract_end_year", 2026),
+        ("contract_start_year", contract_start_year),
+        ("contract_end_year", contract_end_year),
         ("contract_history_months", 24),
         ("reference_depth", 2),
         ("overlap_days", 7),
@@ -114,6 +120,28 @@ class UpdatePipelineTests(unittest.TestCase):
         tickers = {spec.ticker for spec in specs}
         self.assertIn("HOG6 Comdty", tickers)
         self.assertIn("RVO Index", tickers)
+
+    def test_one_digit_year_expands_only_when_a_decade_collides(self) -> None:
+        write_config(
+            self.config_path,
+            contract_start_year=2000,
+            contract_end_year=2028,
+        )
+        config = load_root_config(self.config_path)
+        specs = build_contract_universe(config, date(2026, 8, 3))
+
+        ho_january = {
+            spec.contract_year: spec.ticker
+            for spec in specs
+            if spec.root == "HO" and spec.month_code == "F"
+        }
+        self.assertEqual(ho_january[2008], "HOF8 Index")
+        self.assertEqual(ho_january[2018], "HOF18 Index")
+        self.assertEqual(ho_january[2028], "HOF28 Index")
+        self.assertEqual(
+            len({spec.ticker.casefold() for spec in specs}),
+            len(specs),
+        )
 
     def test_rvo_is_one_monthless_flat_curve_request(self) -> None:
         config = load_root_config(self.config_path)

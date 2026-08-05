@@ -168,16 +168,38 @@ def _subtract_months(value: date, months: int) -> date:
     return date(year, zero_based_month + 1, 1)
 
 
-def _ticker_for(root: SecurityRoot, month_code: str, contract_year: int) -> str:
+ABBREVIATED_YEAR_TOKEN_WIDTHS = {
+    "{y}": 1,
+    "{year_1d}": 1,
+    "{year_digit}": 1,
+    "{yy}": 2,
+    "{year_2d}": 2,
+}
+
+
+def _ticker_for(
+    root: SecurityRoot,
+    month_code: str,
+    contract_year: int,
+    *,
+    extra_year_digits: int = 0,
+) -> str:
+    year_text = str(contract_year)
+
+    def abbreviated_year(default_width: int) -> str:
+        width = min(len(year_text), default_width + max(0, extra_year_digits))
+        return year_text[-width:]
+
     values = {
         "root": root.root,
         "month_code": month_code,
-        "y": str(contract_year % 10),
-        "year_1d": str(contract_year % 10),
-        "year_digit": str(contract_year % 10),
-        "yy": f"{contract_year % 100:02d}",
-        "year_2d": f"{contract_year % 100:02d}",
+        "y": abbreviated_year(1),
+        "year_1d": abbreviated_year(1),
+        "year_digit": abbreviated_year(1),
+        "yy": abbreviated_year(2),
+        "year_2d": abbreviated_year(2),
         "year": contract_year,
+        "yyyy": contract_year,
         "yellow_key": root.yellow_key,
     }
     try:
@@ -185,6 +207,37 @@ def _ticker_for(root: SecurityRoot, month_code: str, contract_year: int) -> str:
     except (KeyError, ValueError) as exc:
         raise UpdateError(f"Cannot render ticker_template for {root.root}: {exc}") from exc
     return " ".join(ticker.split())
+
+
+def _unique_ticker_for(
+    root: SecurityRoot,
+    month_code: str,
+    contract_year: int,
+    seen: set[str],
+) -> str:
+    """Render a ticker, expanding abbreviated year tokens only on collision."""
+
+    abbreviated_widths = [
+        width
+        for token, width in ABBREVIATED_YEAR_TOKEN_WIDTHS.items()
+        if token in root.ticker_template
+    ]
+    minimum_width = min(abbreviated_widths, default=len(str(contract_year)))
+    max_extra_digits = max(0, len(str(contract_year)) - minimum_width)
+    first_ticker = ""
+
+    for extra_year_digits in range(max_extra_digits + 1):
+        ticker = _ticker_for(
+            root,
+            month_code,
+            contract_year,
+            extra_year_digits=extra_year_digits,
+        )
+        first_ticker = first_ticker or ticker
+        if ticker.casefold() not in seen:
+            return ticker
+
+    raise UpdateError(f"Ticker template generated a duplicate security: {first_ticker}")
 
 
 def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tuple[ContractSpec, ...]:
@@ -229,10 +282,8 @@ def build_contract_universe(config: RootConfig, as_of: date | None = None) -> tu
                     _subtract_months(delivery_start, settings.contract_history_months),
                 )
                 end_date = min(current_date, delivery_start - timedelta(days=1))
-                ticker = _ticker_for(root, month_code, contract_year)
+                ticker = _unique_ticker_for(root, month_code, contract_year, seen)
                 normalized = ticker.casefold()
-                if normalized in seen:
-                    raise UpdateError(f"Ticker template generated a duplicate security: {ticker}")
                 seen.add(normalized)
                 specs.append(
                     ContractSpec(
