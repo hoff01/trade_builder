@@ -11,6 +11,8 @@
     const DEFAULT_INTERPOLATION_MAX_SPAN_DAYS = 7;
     const DEFAULT_BBL_PER_MT = 7.33;
     const DEFAULT_GAL_PER_BBL = 42;
+    const SOURCE_AXIS_SPAN = 366;
+    const CONTRACT_AXIS_SPAN = 365;
     const MONTH_CODES = Object.freeze({
         JAN: 'F', FEB: 'G', MAR: 'H', APR: 'J', MAY: 'K', JUN: 'M',
         JUL: 'N', AUG: 'Q', SEP: 'U', OCT: 'V', NOV: 'X', DEC: 'Z'
@@ -26,6 +28,72 @@
         if (value === '' || value == null) return null;
         const number = Number(value);
         return Number.isFinite(number) ? number : null;
+    }
+
+    function sourceCycleDay(value) {
+        const sourceDay = asFinite(value);
+        if (sourceDay == null) return null;
+        return ((sourceDay - 1) % SOURCE_AXIS_SPAN + SOURCE_AXIS_SPAN) % SOURCE_AXIS_SPAN + 1;
+    }
+
+    function toContractCycleDay(value) {
+        const sourceDay = asFinite(value);
+        if (sourceDay == null) return null;
+        const cycleIndex = Math.floor((sourceDay - 1) / SOURCE_AXIS_SPAN);
+        const leapTemplateDay = sourceCycleDay(sourceDay);
+        if (leapTemplateDay === 60) return null;
+        const nonLeapDay = leapTemplateDay > 60 ? leapTemplateDay - 1 : leapTemplateDay;
+        return (cycleIndex * CONTRACT_AXIS_SPAN) + nonLeapDay;
+    }
+
+    function normalizeContractSeries(series) {
+        if (!series || !Array.isArray(series.x) || !Array.isArray(series.y)) {
+            return { x: [], y: [], sourceIndexes: [] };
+        }
+        const x = [];
+        const y = [];
+        const sourceIndexes = [];
+        const length = Math.min(series.x.length, series.y.length);
+        for (let index = 0; index < length; index++) {
+            const contractDay = toContractCycleDay(series.x[index]);
+            if (contractDay == null) continue;
+            x.push(contractDay);
+            y.push(series.y[index]);
+            sourceIndexes.push(index);
+        }
+        return { x, y, sourceIndexes };
+    }
+
+    function latestContractEndDay(seriesList) {
+        const candidates = Array.isArray(seriesList) ? seriesList : [];
+        let latestExtendedDay = null;
+        candidates.forEach((series) => {
+            if (!series || !Array.isArray(series.x) || !Array.isArray(series.y)) return;
+            const length = Math.min(series.x.length, series.y.length);
+            for (let index = 0; index < length; index++) {
+                if (asFinite(series.y[index]) == null) continue;
+                const contractDay = toContractCycleDay(series.x[index]);
+                if (contractDay == null) continue;
+                latestExtendedDay = latestExtendedDay == null
+                    ? contractDay
+                    : Math.max(latestExtendedDay, contractDay);
+            }
+        });
+        if (latestExtendedDay == null) return null;
+        return ((latestExtendedDay - 1) % CONTRACT_AXIS_SPAN + CONTRACT_AXIS_SPAN) % CONTRACT_AXIS_SPAN + 1;
+    }
+
+    function rotateCycleDay(value, anchorDay, span) {
+        const day = asFinite(value);
+        const anchor = asFinite(anchorDay);
+        const requestedSpan = asFinite(span);
+        const cycleSpan = requestedSpan != null && requestedSpan > 0
+            ? requestedSpan
+            : CONTRACT_AXIS_SPAN;
+        if (day == null || anchor == null) return value;
+        const normalized = ((day - 1) % cycleSpan + cycleSpan) % cycleSpan + 1;
+        const offset = normalized - anchor;
+        return offset <= 0 ? offset + cycleSpan : offset;
     }
 
     function round(value, decimals) {
@@ -196,9 +264,11 @@
         if (!points.length) return { x: outputX, y: outputY, interpolated };
 
         const requestedSpan = asFinite(maxSpanDays);
-        const maxSpan = requestedSpan != null && requestedSpan > 0
-            ? requestedSpan
-            : DEFAULT_INTERPOLATION_MAX_SPAN_DAYS;
+        const maxSpan = maxSpanDays === Number.POSITIVE_INFINITY
+            ? Number.POSITIVE_INFINITY
+            : (requestedSpan != null && requestedSpan > 0
+                ? requestedSpan
+                : DEFAULT_INTERPOLATION_MAX_SPAN_DAYS);
 
         outputX.forEach((target, outputIndex) => {
             if (!Number.isFinite(target)) return;
@@ -225,6 +295,42 @@
         });
 
         return { x: outputX, y: outputY, interpolated };
+    }
+
+    function interpolateInteriorSeries(series) {
+        if (!series || !Array.isArray(series.x) || !Array.isArray(series.y)) {
+            return { x: [], y: [], interpolated: [], interpolatedPoints: 0 };
+        }
+
+        const targetSet = new Set();
+        const length = Math.min(series.x.length, series.y.length);
+        let minimum = null;
+        let maximum = null;
+        for (let index = 0; index < length; index++) {
+            const x = asFinite(series.x[index]);
+            const y = asFinite(series.y[index]);
+            if (x == null || y == null) continue;
+            targetSet.add(x);
+            minimum = minimum == null ? x : Math.min(minimum, x);
+            maximum = maximum == null ? x : Math.max(maximum, x);
+        }
+        if (minimum == null || maximum == null) {
+            return { x: [], y: [], interpolated: [], interpolatedPoints: 0 };
+        }
+
+        for (let target = Math.ceil(minimum); target <= Math.floor(maximum); target++) {
+            targetSet.add(target);
+        }
+        const targets = Array.from(targetSet).sort((a, b) => a - b);
+        const aligned = interpolateSeriesAtTargets(
+            series,
+            targets,
+            Number.POSITIVE_INFINITY
+        );
+        return {
+            ...aligned,
+            interpolatedPoints: aligned.interpolated.filter(Boolean).length
+        };
     }
 
     function combineWeightedSeries(legs, targetUnit, options) {
@@ -405,9 +511,16 @@
         DEFAULT_INTERPOLATION_MAX_SPAN_DAYS,
         DEFAULT_BBL_PER_MT,
         DEFAULT_GAL_PER_BBL,
+        SOURCE_AXIS_SPAN,
+        CONTRACT_AXIS_SPAN,
         MONTH_CODES,
         MONTH_NAMES,
         asFinite,
+        sourceCycleDay,
+        toContractCycleDay,
+        normalizeContractSeries,
+        latestContractEndDay,
+        rotateCycleDay,
         round,
         round5,
         format,
@@ -419,6 +532,7 @@
         conversionFactor,
         weightedSum,
         interpolateSeriesAtTargets,
+        interpolateInteriorSeries,
         combineWeightedSeries,
         monthToCode,
         expandContractYear,

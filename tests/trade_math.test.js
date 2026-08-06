@@ -42,6 +42,88 @@ test('interpolates a holiday mismatch only between two nearby observations', () 
     });
 });
 
+test('fills every bounded interior day so a contract line remains continuous', () => {
+    const continuous = TradeMath.interpolateInteriorSeries(
+        { x: [1, 3, 10], y: [10, 14, 30] }
+    );
+
+    assert.deepEqual(continuous, {
+        x: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        y: [10, 12, 14, 16.28571, 18.57143, 20.85714, 23.14286, 25.42857, 27.71429, 30],
+        interpolated: [false, true, false, true, true, true, true, true, true, false],
+        interpolatedPoints: 7
+    });
+});
+
+test('continuous interpolation does not extrapolate outside known endpoints', () => {
+    const continuous = TradeMath.interpolateInteriorSeries(
+        { x: [3, 5], y: [12, 16] }
+    );
+
+    assert.deepEqual(continuous, {
+        x: [3, 4, 5],
+        y: [12, 14, 16],
+        interpolated: [false, true, false],
+        interpolatedPoints: 1
+    });
+});
+
+test('fills the non-leap February 29 placeholder instead of breaking the line', () => {
+    const continuous = TradeMath.interpolateInteriorSeries(
+        { x: [59, 60, 61], y: [100, null, 104] }
+    );
+
+    assert.deepEqual(continuous, {
+        x: [59, 60, 61],
+        y: [100, 102, 104],
+        interpolated: [false, true, false],
+        interpolatedPoints: 1
+    });
+});
+
+test('normalizes the leap template to an exact 365-day contract axis', () => {
+    assert.equal(TradeMath.sourceCycleDay(518), 152);
+    assert.equal(TradeMath.toContractCycleDay(59), 59);
+    assert.equal(TradeMath.toContractCycleDay(60), null);
+    assert.equal(TradeMath.toContractCycleDay(61), 60);
+    assert.equal(TradeMath.toContractCycleDay(366), 365);
+    assert.equal(TradeMath.toContractCycleDay(367), 366);
+    assert.equal(TradeMath.toContractCycleDay(518), 516);
+
+    assert.deepEqual(
+        TradeMath.normalizeContractSeries({
+            x: [59, 60, 61, 366, 367, 518],
+            y: [1, 2, 3, 4, 5, 6]
+        }),
+        {
+            x: [59, 60, 365, 366, 516],
+            y: [1, 3, 4, 5, 6],
+            sourceIndexes: [0, 2, 3, 4, 5]
+        }
+    );
+});
+
+test('uses the latest selected-leg endpoint as the shared cycle end', () => {
+    const latestEnd = TradeMath.latestContractEndDay([
+        { x: [153, 509], y: [10, 11] },
+        { x: [153, 511], y: [20, 21] }
+    ]);
+
+    assert.equal(latestEnd, 144);
+    assert.equal(TradeMath.rotateCycleDay(145, latestEnd, 365), 1);
+    assert.equal(TradeMath.rotateCycleDay(latestEnd, latestEnd, 365), 365);
+});
+
+test('puts a partial current contract at the right edge instead of mid-chart', () => {
+    const latestEnd = TradeMath.latestContractEndDay([
+        { x: [153, 218], y: [10, 11] }
+    ]);
+
+    assert.equal(latestEnd, 217);
+    assert.equal(TradeMath.rotateCycleDay(218, latestEnd, 365), 1);
+    assert.equal(TradeMath.rotateCycleDay(217, latestEnd, 365), 365);
+});
+
 test('combines holiday-mismatched legs without filling long or unbounded gaps', () => {
     const combined = TradeMath.combineWeightedSeries([
         { series: { x: [1, 3, 10], y: [10, 14, 30] }, ratio: 1, native_unit: '$/bbl' },

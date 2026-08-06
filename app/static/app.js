@@ -2940,22 +2940,28 @@ function getContractInfo(com) {
 }
 
 const MONTH_AXIS_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTH_AXIS_BOUNDARIES = [1, 32, 61, 92, 122, 153, 183, 214, 245, 275, 306, 336, 367];
-const ROLLING_AXIS_SPAN = MONTH_AXIS_BOUNDARIES[MONTH_AXIS_BOUNDARIES.length - 1] - 1;
+const MONTH_AXIS_BOUNDARIES = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366];
+const ROLLING_AXIS_SPAN = TRADE_MATH.CONTRACT_AXIS_SPAN;
 
 function rotateDayOfYear(value, anchorDay, span) {
     if (!Number.isFinite(value) || !Number.isFinite(anchorDay) || !Number.isFinite(span) || span <= 0) {
         return value;
     }
-    const normalized = ((value - 1) % span + span) % span + 1;
-    const offset = normalized - anchorDay;
-    return offset <= 0 ? offset + span : offset;
+    return TRADE_MATH.rotateCycleDay(value, anchorDay, span);
 }
 
 function shiftSeriesX(values, anchorDay, span) {
     if (!Array.isArray(values)) return [];
     if (!Number.isFinite(anchorDay) || !Number.isFinite(span)) return values.slice();
     return values.map((value) => (Number.isFinite(value) ? rotateDayOfYear(value, anchorDay, span) : value));
+}
+
+function normalizeSeriesForRollingAxis(xValues, yValues, labels) {
+    const normalized = TRADE_MATH.normalizeContractSeries({ x: xValues, y: yValues });
+    const normalizedLabels = Array.isArray(labels)
+        ? normalized.sourceIndexes.map((index) => labels[index])
+        : undefined;
+    return { x: normalized.x, y: normalized.y, labels: normalizedLabels };
 }
 
 function clipSeriesToSpan(xValues, yValues, labels, span, anchorDay) {
@@ -3023,62 +3029,18 @@ function sortSeriesByX(xValues, yValues, customdata) {
     };
 }
 
-function insertGapBreaks(xValues, yValues, customdata, gapThreshold = 10) {
-    const length = Math.min(
-        Array.isArray(xValues) ? xValues.length : 0,
-        Array.isArray(yValues) ? yValues.length : 0,
-        Array.isArray(customdata) ? customdata.length : Number.MAX_SAFE_INTEGER
-    );
-    if (!length) {
-        return {
-            x: Array.isArray(xValues) ? xValues.slice() : [],
-            y: Array.isArray(yValues) ? yValues.slice() : [],
-            customdata: Array.isArray(customdata) ? customdata.slice() : undefined
-        };
-    }
-    const nextX = [];
-    const nextY = [];
-    const nextC = Array.isArray(customdata) ? [] : null;
-    let lastX = null;
-
-    for (let i = 0; i < length; i++) {
-        const rawX = xValues[i];
-        const rawY = yValues[i];
-        const xVal = Number.isFinite(rawX) ? rawX : null;
-        const yVal = Number.isFinite(rawY) ? rawY : null;
-        if (Number.isFinite(lastX) && Number.isFinite(xVal)) {
-            if (gapThreshold != null && xVal - lastX > gapThreshold) {
-                nextX.push(null);
-                nextY.push(null);
-                if (nextC) nextC.push(null);
-            }
-        }
-        nextX.push(xVal);
-        nextY.push(yVal);
-        if (nextC) {
-            nextC.push(Array.isArray(customdata) ? customdata[i] : null);
-        }
-        lastX = xVal != null && yVal != null ? xVal : null;
-    }
-
-    return { x: nextX, y: nextY, customdata: nextC || undefined };
-}
-
 function getAxisAnchorDay(seriesMap, years) {
     if (!seriesMap) return null;
     const yearList = Array.isArray(years) && years.length
         ? years
         : Object.keys(seriesMap).map(Number).filter(Number.isFinite);
-    let maxDay = null;
-    yearList.forEach((year) => {
+    const sortedYears = yearList.slice().sort((a, b) => b - a);
+    for (const year of sortedYears) {
         const series = seriesMap[year] || seriesMap[String(year)];
-        if (!series || !Array.isArray(series.x)) return;
-        series.x.forEach((value) => {
-            if (!Number.isFinite(value)) return;
-            maxDay = maxDay == null ? value : Math.max(maxDay, value);
-        });
-    });
-    return maxDay;
+        const endDay = TRADE_MATH.latestContractEndDay([series]);
+        if (Number.isFinite(endDay)) return endDay;
+    }
+    return null;
 }
 
 function getContractAnchorConfigFromLegs(legs) {
@@ -3110,10 +3072,19 @@ function getContractAnchorDayFromLegs(legs) {
     return config ? config.anchorDay : null;
 }
 
-function getContractAxisAnchorDay(seriesMap, years) {
-    const legAnchor = getContractAnchorDayFromLegs(getLegsForCalculation());
-    if (Number.isFinite(legAnchor)) return legAnchor;
-    return getAxisAnchorDay(seriesMap, years);
+function getContractAxisAnchorDay(data, years) {
+    const seriesMap = data && data.series ? data.series : data;
+    const yearList = Array.isArray(years) && years.length
+        ? years.slice().sort((a, b) => b - a)
+        : Object.keys(seriesMap || {}).map(Number).filter(Number.isFinite).sort((a, b) => b - a);
+    const endByYear = data && data.axisEndByYear ? data.axisEndByYear : {};
+    for (const year of yearList) {
+        const endDay = Number(endByYear[year] != null ? endByYear[year] : endByYear[String(year)]);
+        if (Number.isFinite(endDay)) return endDay;
+    }
+    const seriesAnchor = getAxisAnchorDay(seriesMap, yearList);
+    if (Number.isFinite(seriesAnchor)) return seriesAnchor;
+    return getContractAnchorDayFromLegs(getLegsForCalculation());
 }
 
 function getMonthAxisConfig(minX, maxX) {
@@ -3517,11 +3488,15 @@ function combineLegSeries(legSeries) {
     const yearSets = legSeries.map((item) => new Set(Object.keys(item.series)));
     const sharedYears = Array.from(yearSets[0]).filter((year) => yearSets.every((set) => set.has(year)));
     const combined = {};
-    let interpolatedPoints = 0;
+    const axisEndByYear = {};
 
     sharedYears.forEach((year) => {
         const perLeg = legSeries.map((item) => item.series[year]).filter(Boolean);
         if (perLeg.length !== legSeries.length) return;
+        const axisEndDay = TRADE_MATH.latestContractEndDay(perLeg);
+        if (Number.isFinite(axisEndDay)) {
+            axisEndByYear[year] = axisEndDay;
+        }
         const aligned = TRADE_MATH.combineWeightedSeries(
             legSeries.map((item, index) => ({
                 series: perLeg[index],
@@ -3532,7 +3507,6 @@ function combineLegSeries(legSeries) {
             { maxSpanDays: TRADE_MATH.DEFAULT_INTERPOLATION_MAX_SPAN_DAYS }
         );
         if (!aligned.x.length) return;
-        interpolatedPoints += aligned.interpolatedPoints;
         combined[year] = { x: aligned.x, y: aligned.y };
     });
 
@@ -3544,11 +3518,11 @@ function combineLegSeries(legSeries) {
         : { p90: 0, p95: 0, p99: 0 };
     return {
         series: combined,
+        axisEndByYear,
         var: varStats,
         interpolation: {
-            method: 'linear',
-            maxSpanDays: TRADE_MATH.DEFAULT_INTERPOLATION_MAX_SPAN_DAYS,
-            points: interpolatedPoints
+            method: 'linear-interior',
+            endpointExtrapolation: false
         }
     };
 }
@@ -4301,108 +4275,37 @@ function buildDateLabels(values) {
     const baseYear = 2000; // leap year for consistent Feb 29 mapping
     return values.map((value) => {
         if (!Number.isFinite(value)) return '';
-        const day = Math.round(value);
+        const day = TRADE_MATH.sourceCycleDay(Math.round(value));
         const date = new Date(baseYear, 0, 1);
         date.setDate(day);
         return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
     });
 }
 
-function getTodayCutoffConfig() {
-    const now = new Date();
-    const year = now.getFullYear();
-    const start = new Date(year, 0, 1);
-    const dayOfYear = Math.floor((now - start) / 86400000) + 1;
-    const daysInYear = isLeapYear(year) ? 366 : 365;
-    return {
-        year,
-        dayOfYear,
-        daysInYear
-    };
+function formatContractCycleDay(value) {
+    if (!Number.isFinite(value)) return '';
+    const day = Math.max(1, Math.min(ROLLING_AXIS_SPAN, Math.round(value)));
+    const date = new Date(2001, 0, 1);
+    date.setDate(day);
+    return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' });
 }
 
-function clipSeriesToTodayIfCurrentYear(xValues, yValues, labels, seriesYear) {
-    const yearNum = Number(seriesYear);
-    if (!Number.isFinite(yearNum)) {
-        return { x: xValues, y: yValues, labels };
-    }
-    const cutoff = getTodayCutoffConfig();
-    if (yearNum !== cutoff.year) {
-        return { x: xValues, y: yValues, labels };
-    }
-    const nextX = [];
-    const nextY = [];
-    const nextL = Array.isArray(labels) ? [] : null;
-    for (let i = 0; i < xValues.length; i++) {
-        const x = xValues[i];
-        if (!Number.isFinite(x)) continue;
-        const keep = x > cutoff.daysInYear || x <= cutoff.dayOfYear;
-        if (!keep) continue;
-        nextX.push(x);
-        nextY.push(yValues[i]);
-        if (nextL) nextL.push(labels[i]);
-    }
-    return { x: nextX, y: nextY, labels: nextL || undefined };
-}
-
-function isLeapYear(year) {
-    const y = Number(year);
-    if (!Number.isFinite(y)) return false;
-    return (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
-}
-
-function computeSyntheticLeapValue(x, y, targetDay) {
-    let prevVal = null;
-    let nextVal = null;
-    for (let i = 0; i < x.length; i++) {
-        const day = x[i];
-        const value = y[i];
-        if (!Number.isFinite(day) || !Number.isFinite(value)) continue;
-        if (day < targetDay) {
-            prevVal = value;
-            continue;
-        }
-        if (day >= targetDay) {
-            nextVal = value;
-            break;
-        }
-    }
-    if (prevVal != null && nextVal != null) {
-        return TRADE_MATH.round5((prevVal + nextVal) / 2);
-    }
-    if (prevVal != null) return prevVal;
-    if (nextVal != null) return nextVal;
-    return null;
-}
-
-function insertSyntheticLeapDay(series, targetDay, shiftAfter) {
-    const length = Math.min(series.x.length, series.y.length);
-    const baseX = series.x.slice(0, length);
-    const baseY = series.y.slice(0, length);
-    const syntheticValue = computeSyntheticLeapValue(baseX, baseY, targetDay);
-    const alignedX = [];
-    const alignedY = [];
-
-    for (let i = 0; i < length; i++) {
-        const day = baseX[i];
-        if (!Number.isFinite(day)) continue;
-        const mappedDay = shiftAfter && day >= targetDay ? day + 1 : day;
-        alignedX.push(mappedDay);
-        alignedY.push(baseY[i]);
-    }
-
-    if (Number.isFinite(syntheticValue)) {
-        const insertIndex = alignedX.findIndex((day) => day > targetDay);
-        if (insertIndex === -1) {
-            alignedX.push(targetDay);
-            alignedY.push(syntheticValue);
-        } else {
-            alignedX.splice(insertIndex, 0, targetDay);
-            alignedY.splice(insertIndex, 0, syntheticValue);
-        }
-    }
-
-    return { x: alignedX, y: alignedY };
+function setContractAxisDiagnostics(container, traces, anchorDay, span, highlightName) {
+    if (!container || !Number.isFinite(anchorDay) || !Number.isFinite(span)) return;
+    const normalizedAnchor = ((anchorDay - 1) % span + span) % span + 1;
+    const startDay = normalizedAnchor >= span ? 1 : normalizedAnchor + 1;
+    const highlightTrace = (traces || []).find((trace) => String(trace.name) === String(highlightName));
+    const highlightX = highlightTrace && Array.isArray(highlightTrace.x)
+        ? highlightTrace.x.filter(Number.isFinite)
+        : [];
+    container.dataset.contractAxisRange = `1:${span}`;
+    container.dataset.contractAxisSpan = String(span);
+    container.dataset.contractAxisAnchorDay = String(normalizedAnchor);
+    container.dataset.contractAxisStartLabel = formatContractCycleDay(startDay);
+    container.dataset.contractAxisEndLabel = formatContractCycleDay(normalizedAnchor);
+    container.dataset.highlightYear = String(highlightName);
+    container.dataset.highlightFirstX = highlightX.length ? String(highlightX[0]) : '';
+    container.dataset.highlightLastX = highlightX.length ? String(highlightX[highlightX.length - 1]) : '';
 }
 
 function normalizeLeapSeries(series, year) {
@@ -4419,26 +4322,8 @@ function normalizeLeapSeries(series, year) {
         }
         lastValue = value;
     }
-    const numericDays = x.filter(Number.isFinite);
-    if (!numericDays.length) return { x, y };
-    const targetDay = 60;
-    const hasLeapDay = numericDays.includes(targetDay);
-    const isLeap = isLeapYear(year);
-
-    // For non-leap years, insert a null at Feb 29 to break the line.
-    if (!isLeap && !hasLeapDay) {
-        const insertIndex = x.findIndex((day) => Number.isFinite(day) && day > targetDay);
-        if (insertIndex === -1) {
-            x.push(targetDay);
-            y.push(null);
-        } else {
-            x.splice(insertIndex, 0, targetDay);
-            y.splice(insertIndex, 0, null);
-        }
-        return { x, y };
-    }
-
-    return { x, y };
+    const continuous = TRADE_MATH.interpolateInteriorSeries({ x, y });
+    return { x: continuous.x, y: continuous.y };
 }
 
 // CHARTING
@@ -4570,14 +4455,13 @@ function renderPlot(data) {
     const sortedYears = Object.keys(data.series).map(Number).sort((a, b) => a - b);
     const activeYears = resolveActiveYears(sortedYears);
     const axisSpan = ROLLING_AXIS_SPAN;
-    const anchorDay = getContractAxisAnchorDay(data.series, activeYears);
+    const anchorDay = getContractAxisAnchorDay(data, activeYears);
     const useRollingAxis = Number.isFinite(anchorDay);
     let colorIdx = 0;
     let xMin = null;
     let xMax = null;
     let yMin = null;
     let yMax = null;
-    let fullSpanObserved = false;
 
     const highlightYear = activeYears.length ? Math.max(...activeYears) : getLatestYear();
     const displayHighlightYear = getDisplayYear(highlightYear);
@@ -4590,11 +4474,11 @@ function renderPlot(data) {
         let plotX = seriesData.x;
         let plotY = seriesData.y;
         let plotLabels = dateLabels;
-        const cutoff = clipSeriesToTodayIfCurrentYear(plotX, plotY, plotLabels, year);
-        plotX = cutoff.x;
-        plotY = cutoff.y;
-        plotLabels = cutoff.labels || plotLabels;
         if (useRollingAxis) {
+            const normalized = normalizeSeriesForRollingAxis(plotX, plotY, plotLabels);
+            plotX = normalized.x;
+            plotY = normalized.y;
+            plotLabels = normalized.labels || plotLabels;
             plotX = shiftSeriesX(plotX, anchorDay, axisSpan);
             const clipped = clipSeriesToSpan(plotX, plotY, plotLabels, axisSpan);
             plotX = clipped.x;
@@ -4605,22 +4489,6 @@ function renderPlot(data) {
             plotY = sorted.y;
             plotLabels = sorted.customdata || plotLabels;
         }
-        if (Array.isArray(plotX) && plotX.length) {
-            let seriesMin = null;
-            let seriesMax = null;
-            plotX.forEach((value) => {
-                if (!Number.isFinite(value)) return;
-                seriesMin = seriesMin == null ? value : Math.min(seriesMin, value);
-                seriesMax = seriesMax == null ? value : Math.max(seriesMax, value);
-            });
-            if (seriesMin != null && seriesMax != null && (seriesMax - seriesMin) >= (axisSpan - 5)) {
-                fullSpanObserved = true;
-            }
-        }
-        const gapped = insertGapBreaks(plotX, plotY, plotLabels);
-        plotX = gapped.x;
-        plotY = gapped.y;
-        plotLabels = gapped.customdata || plotLabels;
         const contractLabel = getHoverContractLabel(year);
         const formulaLabel = buildContractFormulaForYear(year);
         const customdata = buildHoverCustomdata(plotLabels, contractLabel, formulaLabel);
@@ -4647,6 +4515,7 @@ function renderPlot(data) {
             x: plotX,
             y: plotY,
             mode: 'lines',
+            connectgaps: true,
             name: Number.isFinite(displayYear) ? displayYear.toString() : year.toString(),
             line: { color: colors[colorIdx % colors.length], width: 1.5 },
             opacity: 0.6,
@@ -4663,11 +4532,11 @@ function renderPlot(data) {
         let plotX = currentSeries.x;
         let plotY = currentSeries.y;
         let plotLabels = dateLabels;
-        const cutoff = clipSeriesToTodayIfCurrentYear(plotX, plotY, plotLabels, highlightYear);
-        plotX = cutoff.x;
-        plotY = cutoff.y;
-        plotLabels = cutoff.labels || plotLabels;
         if (useRollingAxis) {
+            const normalized = normalizeSeriesForRollingAxis(plotX, plotY, plotLabels);
+            plotX = normalized.x;
+            plotY = normalized.y;
+            plotLabels = normalized.labels || plotLabels;
             plotX = shiftSeriesX(plotX, anchorDay, axisSpan);
             const clipped = clipSeriesToSpan(plotX, plotY, plotLabels, axisSpan);
             plotX = clipped.x;
@@ -4678,22 +4547,6 @@ function renderPlot(data) {
             plotY = sorted.y;
             plotLabels = sorted.customdata || plotLabels;
         }
-        if (Array.isArray(plotX) && plotX.length) {
-            let seriesMin = null;
-            let seriesMax = null;
-            plotX.forEach((value) => {
-                if (!Number.isFinite(value)) return;
-                seriesMin = seriesMin == null ? value : Math.min(seriesMin, value);
-                seriesMax = seriesMax == null ? value : Math.max(seriesMax, value);
-            });
-            if (seriesMin != null && seriesMax != null && (seriesMax - seriesMin) >= (axisSpan - 5)) {
-                fullSpanObserved = true;
-            }
-        }
-        const gapped = insertGapBreaks(plotX, plotY, plotLabels);
-        plotX = gapped.x;
-        plotY = gapped.y;
-        plotLabels = gapped.customdata || plotLabels;
         const contractLabel = getHoverContractLabel(highlightYear);
         const formulaLabel = buildContractFormulaForYear(highlightYear);
         const customdata = buildHoverCustomdata(plotLabels, contractLabel, formulaLabel);
@@ -4719,6 +4572,7 @@ function renderPlot(data) {
             x: plotX,
             y: plotY,
             mode: 'lines',
+            connectgaps: true,
             name: Number.isFinite(displayHighlightYear) ? displayHighlightYear.toString() : highlightYear.toString(),
             line: { color: '#EF4444', width: 2.5 }, // Red-500
             opacity: 1,
@@ -4731,9 +4585,7 @@ function renderPlot(data) {
 
     const padding = yMin != null && yMax != null ? (yMax - yMin) * 0.08 : 0;
     const axisRange = yMin != null && yMax != null ? [yMin - padding, yMax + padding] : undefined;
-    const displayRange = (useRollingAxis && !fullSpanObserved && xMin != null && xMax != null && (xMax - xMin) < (axisSpan - 2))
-        ? [xMin, xMax]
-        : [1, axisSpan];
+    const displayRange = [1, axisSpan];
     const axisConfig = useRollingAxis
         ? getRollingMonthAxisConfig(anchorDay, axisSpan, displayRange[0], displayRange[1])
         : getMonthAxisConfig(xMin, xMax);
@@ -4808,6 +4660,13 @@ function renderPlot(data) {
 
     Plotly.react('plotly-div', traces, layout, {displayModeBar: false, responsive: true});
     const plotContainer = document.getElementById('plotly-div');
+    setContractAxisDiagnostics(
+        plotContainer,
+        traces,
+        anchorDay,
+        axisSpan,
+        Number.isFinite(displayHighlightYear) ? displayHighlightYear : highlightYear
+    );
     resizePlotOnNextFrame(plotContainer);
 
     lastVolatilityHistogram = state.showVar ? calculateVolatilityHistogram(data) : null;
@@ -4920,14 +4779,13 @@ function renderVarSeasonalityChart(data) {
     const highlightYear = activeYears.length ? Math.max(...activeYears) : getLatestYear();
     const displayHighlightYear = getDisplayYear(highlightYear);
     const axisSpan = ROLLING_AXIS_SPAN;
-    const anchorDay = getContractAxisAnchorDay(seasonality.series, activeYears);
+    const anchorDay = getContractAxisAnchorDay(data, activeYears);
     const useRollingAxis = Number.isFinite(anchorDay);
     let colorIdx = 0;
     let xMin = null;
     let xMax = null;
     let yMin = null;
     let yMax = null;
-    let fullSpanObserved = false;
 
     activeYears.forEach((year) => {
         if (year === highlightYear) return;
@@ -4937,11 +4795,11 @@ function renderVarSeasonalityChart(data) {
         let plotX = seriesData.x;
         let plotY = seriesData.y;
         let plotLabels = dateLabels;
-        const cutoff = clipSeriesToTodayIfCurrentYear(plotX, plotY, plotLabels, year);
-        plotX = cutoff.x;
-        plotY = cutoff.y;
-        plotLabels = cutoff.labels || plotLabels;
         if (useRollingAxis) {
+            const normalized = normalizeSeriesForRollingAxis(plotX, plotY, plotLabels);
+            plotX = normalized.x;
+            plotY = normalized.y;
+            plotLabels = normalized.labels || plotLabels;
             plotX = shiftSeriesX(plotX, anchorDay, axisSpan);
             const clipped = clipSeriesToSpan(plotX, plotY, plotLabels, axisSpan);
             plotX = clipped.x;
@@ -4952,22 +4810,6 @@ function renderVarSeasonalityChart(data) {
             plotY = sorted.y;
             plotLabels = sorted.customdata || plotLabels;
         }
-        if (Array.isArray(plotX) && plotX.length) {
-            let seriesMin = null;
-            let seriesMax = null;
-            plotX.forEach((value) => {
-                if (!Number.isFinite(value)) return;
-                seriesMin = seriesMin == null ? value : Math.min(seriesMin, value);
-                seriesMax = seriesMax == null ? value : Math.max(seriesMax, value);
-            });
-            if (seriesMin != null && seriesMax != null && (seriesMax - seriesMin) >= (axisSpan - 5)) {
-                fullSpanObserved = true;
-            }
-        }
-        const gapped = insertGapBreaks(plotX, plotY, plotLabels);
-        plotX = gapped.x;
-        plotY = gapped.y;
-        plotLabels = gapped.customdata || plotLabels;
         const contractLabel = getHoverContractLabel(year);
         const formulaLabel = buildContractFormulaForYear(year);
         const customdata = buildHoverCustomdata(plotLabels, contractLabel, formulaLabel);
@@ -4992,6 +4834,7 @@ function renderVarSeasonalityChart(data) {
             x: plotX,
             y: plotY,
             mode: 'lines',
+            connectgaps: true,
             name: Number.isFinite(displayYear) ? displayYear.toString() : year.toString(),
             line: { color: colors[colorIdx % colors.length], width: 1.5 },
             opacity: 0.6,
@@ -5007,11 +4850,11 @@ function renderVarSeasonalityChart(data) {
         let plotX = currentSeries.x;
         let plotY = currentSeries.y;
         let plotLabels = dateLabels;
-        const cutoff = clipSeriesToTodayIfCurrentYear(plotX, plotY, plotLabels, highlightYear);
-        plotX = cutoff.x;
-        plotY = cutoff.y;
-        plotLabels = cutoff.labels || plotLabels;
         if (useRollingAxis) {
+            const normalized = normalizeSeriesForRollingAxis(plotX, plotY, plotLabels);
+            plotX = normalized.x;
+            plotY = normalized.y;
+            plotLabels = normalized.labels || plotLabels;
             plotX = shiftSeriesX(plotX, anchorDay, axisSpan);
             const clipped = clipSeriesToSpan(plotX, plotY, plotLabels, axisSpan);
             plotX = clipped.x;
@@ -5022,22 +4865,6 @@ function renderVarSeasonalityChart(data) {
             plotY = sorted.y;
             plotLabels = sorted.customdata || plotLabels;
         }
-        if (Array.isArray(plotX) && plotX.length) {
-            let seriesMin = null;
-            let seriesMax = null;
-            plotX.forEach((value) => {
-                if (!Number.isFinite(value)) return;
-                seriesMin = seriesMin == null ? value : Math.min(seriesMin, value);
-                seriesMax = seriesMax == null ? value : Math.max(seriesMax, value);
-            });
-            if (seriesMin != null && seriesMax != null && (seriesMax - seriesMin) >= (axisSpan - 5)) {
-                fullSpanObserved = true;
-            }
-        }
-        const gapped = insertGapBreaks(plotX, plotY, plotLabels);
-        plotX = gapped.x;
-        plotY = gapped.y;
-        plotLabels = gapped.customdata || plotLabels;
         const contractLabel = getHoverContractLabel(highlightYear);
         const formulaLabel = buildContractFormulaForYear(highlightYear);
         const customdata = buildHoverCustomdata(plotLabels, contractLabel, formulaLabel);
@@ -5061,6 +4888,7 @@ function renderVarSeasonalityChart(data) {
             x: plotX,
             y: plotY,
             mode: 'lines',
+            connectgaps: true,
             name: Number.isFinite(displayHighlightYear) ? displayHighlightYear.toString() : highlightYear.toString(),
             line: { color: '#EF4444', width: 2.2 },
             opacity: 1,
@@ -5080,9 +4908,7 @@ function renderVarSeasonalityChart(data) {
 
     const padding = yMin != null && yMax != null ? (yMax - yMin) * 0.08 : 0;
     const axisRange = yMin != null && yMax != null ? [yMin - padding, yMax + padding] : undefined;
-    const displayRange = (useRollingAxis && !fullSpanObserved && xMin != null && xMax != null && (xMax - xMin) < (axisSpan - 2))
-        ? [xMin, xMax]
-        : [1, axisSpan];
+    const displayRange = [1, axisSpan];
     const axisConfig = useRollingAxis
         ? getRollingMonthAxisConfig(anchorDay, axisSpan, displayRange[0], displayRange[1])
         : getMonthAxisConfig(xMin, xMax);

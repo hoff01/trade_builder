@@ -106,7 +106,9 @@ The dashboard has three separate workspaces:
 
 All per-leg unit conversion occurs before ratios are applied, so mixed-unit trades are valid. The four supported price sources are `PX_LAST`, `PX_CLOSE`, `PX_SETTLE`, and `PX_FAIR_1430` when Bloomberg returns them and they are listed in `dashboard_fields`. The default portable dashboard embeds only `PX_LAST`; the companion CSV and Parquet retain every requested `fields` value.
 
-When two trade legs follow different holiday calendars, the browser calculation can linearly interpolate a missing leg value only when valid observations bracket that date within seven calendar days. It never extrapolates the beginning or end of a series and never fills a longer outage. This alignment happens only in the JavaScript trade calculation; the Bloomberg CSV and Parquet preserve the original observed dates and values.
+Every contract series is made continuous in the browser by linearly interpolating each missing calendar day that is bounded by two known observations. This happens before single- or multi-leg trade math, so different holiday calendars and longer interior gaps cannot break a plotted line. The dashboard never extrapolates before the first observation or after the last observation, and the Bloomberg CSV and Parquet preserve the original observed dates and values.
+
+The chart x-axis is always one 365-day contract cycle. For the latest selected contract year, the dashboard finds the latest finite observation across every active leg, places that date at day 365 on the right edge, and starts the axis on the following calendar day at day 1. February 29 is omitted from chart coordinates so leap years do not shift month/day alignment; the source CSV and Parquet still retain the original leap-day observation.
 
 ## Add or change a security root
 
